@@ -1,0 +1,42 @@
+{
+  "query": "SELECT id, participantId, type, amount, month, year FROM transactions;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2McaSijoqXB8zXs.root --database R7x3snC8sWykHTS5rmY5nP --execute SELECT id, participantId, type, amount, month, year FROM transactions;",
+  "rows": [
+    {
+      "id": "510007",
+      "participantId": "330001",
+      "type": "payment",
+      "amount": "220.00",
+      "month": "janeiro",
+      "year": "2026"
+    },
+    {
+      "id": "510008",
+      "participantId": "330001",
+      "type": "payment",
+      "amount": "220.00",
+      "month": "julho",
+      "year": "2026"
+    },
+    {
+      "id": "510009",
+      "participantId": "330001",
+      "type": "amortization",
+      "amount": "200.00",
+      "month": "NULL",
+      "year": "NULL"
+    },
+    {
+      "id": "510010",
+      "participantId": "330001",
+      "type": "payment",
+      "amount": "200.00",
+      "month": "janeiro",
+      "year": "2026"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tparticipantId\ttype\tamount\tmonth\tyear\n510007\t330001\tpayment\t220.00\tjaneiro\t2026\n510008\t330001\tpayment\t220.00\tjulho\t2026\n510009\t330001\tamortization\t200.00\tNULL\tNULL\n510010\t330001\tpayment\t200.00\tjaneiro\t2026\n",
+  "stderr": "",
+  "execution_time_ms": 56
+}

@@ -1,0 +1,28 @@
+{
+  "query": "SELECT * FROM monthlyPayments ORDER BY id DESC;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2McaSijoqXB8zXs.root --database R7x3snC8sWykHTS5rmY5nP --execute SELECT * FROM monthlyPayments ORDER BY id DESC;",
+  "rows": [
+    {
+      "id": "480006",
+      "participantId": "330001",
+      "month": "julho",
+      "year": "2026",
+      "paid": "0",
+      "createdAt": "2026-01-01 06:12:18",
+      "updatedAt": "2026-01-01 06:12:33"
+    },
+    {
+      "id": "480005",
+      "participantId": "330001",
+      "month": "janeiro",
+      "year": "2026",
+      "paid": "0",
+      "createdAt": "2026-01-01 06:12:01",
+      "updatedAt": "2026-01-01 06:23:54"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tparticipantId\tmonth\tyear\tpaid\tcreatedAt\tupdatedAt\n480006\t330001\tjulho\t2026\t0\t2026-01-01 06:12:18\t2026-01-01 06:12:33\n480005\t330001\tjaneiro\t2026\t0\t2026-01-01 06:12:01\t2026-01-01 06:23:54\n",
+  "stderr": "",
+  "execution_time_ms": 52
+}
