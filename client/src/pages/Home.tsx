@@ -23,6 +23,36 @@ import { formatCurrency } from '@/lib/format-currency';
 import { showSuccessToast, showErrorToast, showWarningToast } from '@/lib/toast-utils';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 
+// ── Tipos derivados do tRPC (evita o uso de `any`) ────────────────────────────
+type Participant = {
+  id: number;
+  name: string;
+  email?: string | null;
+  totalLoan: number | string;
+  currentDebt: number | string;
+  monthlyPayments?: { id: number; month: string; year: number }[];
+  createdAt?: string | Date | null;
+};
+
+type Transaction = {
+  id: number;
+  participantId: number;
+  type: 'payment' | 'amortization' | string;
+  amount: number | string;
+  month?: string;
+  year?: number;
+  createdAt?: string | Date | null;
+};
+
+type AuditEntry = {
+  id: number;
+  participantId: number;
+  action: string;
+  description?: string;
+  createdAt?: string | Date | null;
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 const MONTHS = [
   'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
   'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'
@@ -36,15 +66,15 @@ export default function Home() {
   // tRPC queries and mutations
   const { data: participants = [], isLoading } = trpc.caixinha.listParticipants.useQuery(undefined, {
     enabled: isAuthenticated,
-  });
+  }) as { data: Participant[]; isLoading: boolean };
   
   const { data: allTransactions = [] } = trpc.caixinha.getAllTransactions.useQuery(undefined, {
     enabled: isAuthenticated,
-  });
+  }) as { data: Transaction[] };
 
   const { data: auditLogEntries = [] } = trpc.caixinha.getAuditLog.useQuery({ limit: 50 }, {
     enabled: isAuthenticated,
-  });
+  }) as { data: AuditEntry[] };
 
   // Cache data when it changes
   useEffect(() => {
@@ -166,30 +196,34 @@ export default function Home() {
   const [editNameValue, setEditNameValue] = useState('');
   const [editEmailValue, setEditEmailValue] = useState('');
   const [paymentMonth, setPaymentMonth] = useState(MONTHS[new Date().getMonth()]);
-  const [paymentYear, setPaymentYear] = useState('2026');
+  const [paymentYear, setPaymentYear] = useState(new Date().getFullYear().toString());
 
-  const selectedParticipant = participants.find((p: any) => p.id === selectedParticipantId);
+  const selectedParticipant = participants.find((p: Participant) => p.id === selectedParticipantId);
 
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
 
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-[#F5F5F0] flex items-center justify-center">
-        <div className="text-center">
-          <h1 className="text-4xl font-black uppercase mb-6">Caixinha Comunitária</h1>
-          <p className="text-lg mb-8 text-gray-600">Faça login para gerenciar sua caixinha</p>
-          <Button
-            onClick={() => window.location.href = getLoginUrl()}
-            className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase h-12 px-8"
-          >
-            Fazer Login
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  // ── Cálculos do dashboard ──────────────────────────────────────────────────
+  // Fix crítico: usar t.amount em vez do valor hardcoded 200
+  const totalPaymentAmount = allTransactions
+    .filter((t: Transaction) => t.type === 'payment')
+    .reduce((acc: number, t: Transaction) => acc + parseFloat(t.amount.toString()), 0);
 
+  const totalAmortizationAmount = allTransactions
+    .filter((t: Transaction) => t.type === 'amortization')
+    .reduce((acc: number, t: Transaction) => acc + parseFloat(t.amount.toString()), 0);
+
+  const MONTHLY_FEE = 200; // taxa fixa mensal por pagamento
+  const paymentCount = allTransactions.filter((t: Transaction) => t.type === 'payment').length;
+
+  const totalFees = paymentCount * MONTHLY_FEE + totalAmortizationAmount;
+  const totalInterest = totalPaymentAmount - paymentCount * MONTHLY_FEE;
+  const totalDebts = participants.reduce(
+    (acc: number, p: Participant) => acc + parseFloat(p.currentDebt.toString()), 0
+  );
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // ── Handlers (devem ficar ANTES de qualquer return condicional) ────────────
   const handleAddParticipant = async () => {
     if (!newParticipantName.trim()) {
       showErrorToast('Nome do participante é obrigatório');
@@ -370,7 +404,7 @@ export default function Home() {
 
   const openEditEmailModal = (participantId: number) => {
     setSelectedParticipantId(participantId);
-    const participant = participants.find((p: any) => p.id === participantId);
+    const participant = participants.find((p: Participant) => p.id === participantId);
     setEditEmailValue(participant?.email || '');
     setIsEditEmailOpen(true);
   };
@@ -402,20 +436,24 @@ export default function Home() {
       showErrorToast('Erro ao deletar participante');
     }
   };
+  // ── Fim dos handlers ──────────────────────────────────────────────────────
 
-  // Calculate totals from transactions
-  const totalFees = allTransactions
-    .filter((t: any) => t.type === 'payment')
-    .reduce((acc: number) => acc + 200, 0) + 
-    allTransactions
-    .filter((t: any) => t.type === 'amortization')
-    .reduce((acc: number, t: any) => acc + parseFloat(t.amount.toString()), 0);
-
-  const totalInterest = allTransactions
-    .filter((t: any) => t.type === 'payment')
-    .reduce((acc: number, t: any) => acc + (parseFloat(t.amount.toString()) - 200), 0);
-
-  const totalDebts = participants.reduce((acc: number, p: any) => acc + parseFloat(p.currentDebt.toString()), 0);
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[#F5F5F0] flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-4xl font-black uppercase mb-6">Caixinha Comunitária</h1>
+          <p className="text-lg mb-8 text-gray-600">Faça login para gerenciar sua caixinha</p>
+          <Button
+            onClick={() => window.location.href = getLoginUrl()}
+            className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase h-12 px-8"
+          >
+            Fazer Login
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F5F5F0] font-sans pb-20">
@@ -500,17 +538,17 @@ export default function Home() {
             <Button
               onClick={() => {
                 try {
-                  const participantsData = participants.map((p: any) => ({
+                  const participantsData = participants.map((p: Participant) => ({
                     id: p.id,
                     name: p.name,
                     totalLoan: p.totalLoan.toString(),
                     currentDebt: p.currentDebt.toString(),
                     createdAt: p.createdAt?.toString(),
                   }));
-                  const transactionsData = allTransactions.map((t: any) => ({
+                  const transactionsData = allTransactions.map((t: Transaction) => ({
                     id: t.id,
                     participantId: t.participantId,
-                    participantName: participants.find((p: any) => p.id === t.participantId)?.name || 'Desconhecido',
+                    participantName: participants.find((p: Participant) => p.id === t.participantId)?.name || 'Desconhecido',
                     type: t.type,
                     amount: t.amount.toString(),
                     createdAt: t.createdAt?.toString() || new Date().toISOString(),
@@ -562,7 +600,7 @@ export default function Home() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 md:gap-8">
-              {participants.map((participant: any) => (
+              {participants.map((participant: Participant) => (
                 <ParticipantCard 
                   key={participant.id} 
                   participant={participant}
@@ -621,7 +659,7 @@ export default function Home() {
         {/* Debtors Section */}
         {participants && participants.length > 0 && (
           <section className="mb-12">
-            <DebtorsList debtors={participants.map((p: any) => ({
+            <DebtorsList debtors={participants.map((p: Participant) => ({
               id: p.id,
               name: p.name,
               totalLoan: parseFloat(p.totalLoan.toString()),
@@ -824,7 +862,7 @@ export default function Home() {
                   <h3 className="text-sm font-black uppercase text-gray-700 mb-3">Transações</h3>
                   <TransactionHistory 
                     participantId={selectedParticipant.id}
-                    transactions={allTransactions.filter((t: any) => t.participantId === selectedParticipant.id)}
+                    transactions={allTransactions.filter((t: Transaction) => t.participantId === selectedParticipant.id)}
                     monthlyPayments={selectedParticipant.monthlyPayments || []}
                     onUnmarkPayment={(paymentId: number) => {
                       unmarkPaymentMutation.mutate({ paymentId, participantId: selectedParticipant.id });
@@ -835,7 +873,7 @@ export default function Home() {
                 <div className="border-t-2 border-black pt-4">
                   <h3 className="text-sm font-black uppercase text-gray-700 mb-3">Auditoria</h3>
                   <AuditLog 
-                    entries={auditLogEntries.filter((e: any) => e.participantId === selectedParticipant.id)}
+                    entries={auditLogEntries.filter((e: AuditEntry) => e.participantId === selectedParticipant.id)}
                     participantId={selectedParticipant.id}
                   />
                 </div>
@@ -1011,22 +1049,28 @@ export default function Home() {
       />
 
       {/* Debt Evolution Chart Modal */}
-      {chartParticipantId && participants && (
-        <DebtEvolutionChart
-          isOpen={isChartOpen}
-          onClose={() => {
-            setIsChartOpen(false);
-            setChartParticipantId(null);
-          }}
-          participantName={participants.find((p: any) => p.id === chartParticipantId)?.name || 'Desconhecido'}
-          data={[
-            { month: 'Inicial', debt: parseFloat(participants.find((p: any) => p.id === chartParticipantId)?.totalLoan?.toString() || '0'), paid: 0 },
-            { month: 'Atual', debt: parseFloat(participants.find((p: any) => p.id === chartParticipantId)?.currentDebt?.toString() || '0'), paid: parseFloat(participants.find((p: any) => p.id === chartParticipantId)?.totalLoan?.toString() || '0') - parseFloat(participants.find((p: any) => p.id === chartParticipantId)?.currentDebt?.toString() || '0') },
-          ]}
-          initialDebt={parseFloat(participants.find((p: any) => p.id === chartParticipantId)?.totalLoan?.toString() || '0')}
-          currentDebt={parseFloat(participants.find((p: any) => p.id === chartParticipantId)?.currentDebt?.toString() || '0')}
-        />
-      )}
+      {chartParticipantId && participants && (() => {
+        const chartParticipant = participants.find((p: Participant) => p.id === chartParticipantId);
+        if (!chartParticipant) return null;
+        const initialDebt = parseFloat(chartParticipant.totalLoan?.toString() || '0');
+        const currentDebt = parseFloat(chartParticipant.currentDebt?.toString() || '0');
+        return (
+          <DebtEvolutionChart
+            isOpen={isChartOpen}
+            onClose={() => {
+              setIsChartOpen(false);
+              setChartParticipantId(null);
+            }}
+            participantName={chartParticipant.name || 'Desconhecido'}
+            data={[
+              { month: 'Inicial', debt: initialDebt, paid: 0 },
+              { month: 'Atual', debt: currentDebt, paid: initialDebt - currentDebt },
+            ]}
+            initialDebt={initialDebt}
+            currentDebt={currentDebt}
+          />
+        );
+      })()}
 
       {/* Reset Month Confirmation Modal */}
       <ConfirmationModal
