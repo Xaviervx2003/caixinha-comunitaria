@@ -1,17 +1,21 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, decimal, boolean } from "drizzle-orm/mysql-core";
+import {
+  int,
+  mysqlEnum,
+  mysqlTable,
+  text,
+  timestamp,
+  varchar,
+  decimal,
+  boolean,
+  uniqueIndex,
+  index,
+} from "drizzle-orm/mysql-core";
 
-/**
- * Core user table backing auth flow.
- * Extend this file with additional tables as your product grows.
- * Columns use camelCase to match both database fields and generated types.
- */
+// ─────────────────────────────────────────
+// USERS
+// ─────────────────────────────────────────
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
@@ -25,91 +29,181 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-/**
- * Participants table for Caixinha Comunitária
- */
-export const participants = mysqlTable("participants", {
+// ─────────────────────────────────────────
+// CAIXINHA METADATA
+// ─────────────────────────────────────────
+export const caixinhaMetadata = mysqlTable("caixinhaMetadata", {
   id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  email: varchar("email", { length: 320 }),
-  totalLoan: decimal("totalLoan", { precision: 10, scale: 2 }).default("0").notNull(),
-  currentDebt: decimal("currentDebt", { precision: 10, scale: 2 }).default("0").notNull(),
+  ownerId: int("ownerId").notNull().references(() => users.id),
+  name: varchar("name", { length: 255 }).default("Minha Caixinha").notNull(),
+  description: text("description"),
+  isPublic: boolean("isPublic").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
+
+export type CaixinhaMetadata = typeof caixinhaMetadata.$inferSelect;
+export type InsertCaixinhaMetadata = typeof caixinhaMetadata.$inferInsert;
+
+// ─────────────────────────────────────────
+// PARTICIPANTS
+// ─────────────────────────────────────────
+export const participants = mysqlTable(
+  "participants",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    caixinhaId: int("caixinhaId")
+      .notNull()
+      .references(() => caixinhaMetadata.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 255 }).notNull(),
+    email: varchar("email", { length: 320 }),
+    totalLoan: decimal("totalLoan", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    currentDebt: decimal("currentDebt", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    caixinhaIdx: index("idx_participants_caixinha").on(table.caixinhaId),
+  })
+);
 
 export type Participant = typeof participants.$inferSelect;
 export type InsertParticipant = typeof participants.$inferInsert;
 
-/**
- * Monthly payments table for tracking which months have been paid
- */
-export const monthlyPayments = mysqlTable("monthlyPayments", {
-  id: int("id").autoincrement().primaryKey(),
-  participantId: int("participantId").notNull(),
-  month: varchar("month", { length: 20 }).notNull(),
-  year: int("year").notNull(),
-  paid: int("paid").default(0).notNull(), // 0 = false, 1 = true
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+// ─────────────────────────────────────────
+// MONTHLY PAYMENTS
+// ─────────────────────────────────────────
+export const monthlyPayments = mysqlTable(
+  "monthlyPayments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    participantId: int("participantId")
+      .notNull()
+      .references(() => participants.id, { onDelete: "cascade" }),
+    month: varchar("month", { length: 7 }).notNull(), // "YYYY-MM"
+    year: int("year").notNull(),
+    paid: boolean("paid").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    uniquePayment: uniqueIndex("uq_payment_participant_month_year").on(
+      table.participantId,
+      table.month,
+      table.year
+    ),
+  })
+);
 
 export type MonthlyPayment = typeof monthlyPayments.$inferSelect;
 export type InsertMonthlyPayment = typeof monthlyPayments.$inferInsert;
 
-/**
- * Transactions table for tracking all payments and amortizations
- */
-export const transactions = mysqlTable("transactions", {
-  id: int("id").autoincrement().primaryKey(),
-  participantId: int("participantId").notNull(),
-  type: mysqlEnum("type", ["loan", "payment", "amortization"]).notNull(),
-  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
-  month: varchar("month", { length: 20 }), // "janeiro", "fevereiro", etc
-  year: int("year"),
-  description: text("description"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+// ─────────────────────────────────────────
+// TRANSACTIONS
+// ─────────────────────────────────────────
+export const transactions = mysqlTable(
+  "transactions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    participantId: int("participantId")
+      .notNull()
+      .references(() => participants.id, { onDelete: "cascade" }),
+    type: mysqlEnum("type", ["loan", "payment", "amortization"]).notNull(),
+    amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+    balanceBefore: decimal("balanceBefore", { precision: 10, scale: 2 }).notNull(),
+    balanceAfter: decimal("balanceAfter", { precision: 10, scale: 2 }).notNull(),
+    month: varchar("month", { length: 7 }), // "YYYY-MM"
+    year: int("year"),
+    description: text("description"),
+    idempotencyKey: varchar("idempotencyKey", { length: 36 }).unique(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    participantIdx: index("idx_transactions_participant").on(table.participantId),
+    periodIdx: index("idx_transactions_period").on(
+      table.participantId,
+      table.month,
+      table.year
+    ),
+  })
+);
 
 export type Transaction = typeof transactions.$inferSelect;
 export type InsertTransaction = typeof transactions.$inferInsert;
 
-/**
- * Monthly summary table for tracking arrecadação
- */
-export const monthlySummary = mysqlTable("monthlySummary", {
-  id: int("id").autoincrement().primaryKey(),
-  month: varchar("month", { length: 20 }).notNull(), // "janeiro", "fevereiro", etc
-  year: int("year").notNull(),
-  totalFeesCollected: decimal("totalFeesCollected", { precision: 10, scale: 2 }).default("0").notNull(),
-  totalInterestCollected: decimal("totalInterestCollected", { precision: 10, scale: 2 }).default("0").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+// ─────────────────────────────────────────
+// MONTHLY SUMMARY
+// ─────────────────────────────────────────
+export const monthlySummary = mysqlTable(
+  "monthlySummary",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    caixinhaId: int("caixinhaId")
+      .notNull()
+      .references(() => caixinhaMetadata.id, { onDelete: "cascade" }),
+    month: varchar("month", { length: 7 }).notNull(), // "YYYY-MM"
+    year: int("year").notNull(),
+    totalFeesCollected: decimal("totalFeesCollected", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    totalInterestCollected: decimal("totalInterestCollected", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    uniqueSummary: uniqueIndex("uq_summary_caixinha_month_year").on(
+      table.caixinhaId,
+      table.month,
+      table.year
+    ),
+  })
+);
 
 export type MonthlySummary = typeof monthlySummary.$inferSelect;
 export type InsertMonthlySummary = typeof monthlySummary.$inferInsert;
 
-/**
- * Audit log table for tracking all changes to payments
- */
-export const auditLog = mysqlTable("auditLog", {
-  id: int("id").autoincrement().primaryKey(),
-  participantId: int("participantId").notNull(),
-  participantName: varchar("participantName", { length: 255 }).notNull(),
-  action: mysqlEnum("action", ["payment_marked", "payment_unmarked", "amortization_added", "participant_created", "participant_deleted"]).notNull(),
-  month: varchar("month", { length: 20 }),
-  year: int("year"),
-  amount: decimal("amount", { precision: 10, scale: 2 }),
-  description: text("description"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+// ─────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────
+export const auditLog = mysqlTable(
+  "auditLog",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    participantId: int("participantId")
+      .notNull()
+      .references(() => participants.id, { onDelete: "restrict" }),
+    participantName: varchar("participantName", { length: 255 }).notNull(),
+    action: mysqlEnum("action", [
+      "payment_marked",
+      "payment_unmarked",
+      "amortization_added",
+      "participant_created",
+      "participant_deleted",
+    ]).notNull(),
+    month: varchar("month", { length: 7 }), // "YYYY-MM"
+    year: int("year"),
+    amount: decimal("amount", { precision: 10, scale: 2 }),
+    description: text("description"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    participantIdx: index("idx_audit_participant").on(table.participantId),
+    createdIdx: index("idx_audit_created").on(table.createdAt),
+  })
+);
 
 export type AuditLog = typeof auditLog.$inferSelect;
 export type InsertAuditLog = typeof auditLog.$inferInsert;
-/**
- * Caixinha sharing table - allows sharing a caixinha with multiple users
- */
+
+// ─────────────────────────────────────────
+// CAIXINHA SHARES
+// ─────────────────────────────────────────
 export const caixinhaShares = mysqlTable("caixinhaShares", {
   id: int("id").autoincrement().primaryKey(),
   ownerId: int("ownerId").notNull().references(() => users.id),
@@ -123,19 +217,3 @@ export const caixinhaShares = mysqlTable("caixinhaShares", {
 
 export type CaixinhaShare = typeof caixinhaShares.$inferSelect;
 export type InsertCaixinhaShare = typeof caixinhaShares.$inferInsert;
-
-/**
- * Caixinha metadata table - stores metadata about each caixinha
- */
-export const caixinhaMetadata = mysqlTable("caixinhaMetadata", {
-  id: int("id").autoincrement().primaryKey(),
-  ownerId: int("ownerId").notNull().references(() => users.id),
-  name: varchar("name", { length: 255 }).default("Minha Caixinha").notNull(),
-  description: text("description"),
-  isPublic: boolean("isPublic").default(false).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
-
-export type CaixinhaMetadata = typeof caixinhaMetadata.$inferSelect;
-export type InsertCaixinhaMetadata = typeof caixinhaMetadata.$inferInsert;

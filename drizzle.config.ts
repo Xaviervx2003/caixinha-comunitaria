@@ -1,4 +1,7 @@
 import { defineConfig } from "drizzle-kit";
+import { config } from "dotenv";
+
+config(); // ✅ carrega o .env antes de ler DATABASE_URL
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
@@ -8,7 +11,7 @@ if (!connectionString) {
 export default defineConfig({
   schema: "drizzle/schema.ts",
   out: "./drizzle",
-  dialect: "mysql",
+  dialect: "mysql",              // ✅ explícito
   dbCredentials: {
     url: connectionString,
   },

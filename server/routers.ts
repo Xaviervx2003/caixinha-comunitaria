@@ -1,442 +1,775 @@
+// server/appRouter.ts
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { eq, and, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { participants, transactions, monthlyPayments, auditLog } from "../drizzle/schema";
-import { eq, and } from "drizzle-orm";
-import { sendPaymentConfirmationEmail } from "./email";
+import { calcMonthlyPayment } from "./businessLogic";
+import Decimal from "decimal.js";
+import {
+  participants,
+  transactions,
+  monthlyPayments,
+  auditLog,
+  caixinhaMetadata,
+} from "../drizzle/schema";
+
+// ─────────────────────────────────────────
+// Helper: busca e valida ownership da caixinha
+// ─────────────────────────────────────────
+async function getCaixinhaOrThrow(db: Awaited<ReturnType<typeof getDb>>, userId: number) {
+  const [caixinha] = await db
+    .select()
+    .from(caixinhaMetadata)
+    .where(eq(caixinhaMetadata.ownerId, userId))
+    .limit(1);
+
+  if (!caixinha) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Caixinha não encontrada para este usuário.",
+    });
+  }
+  return caixinha;
+}
+
+// ─────────────────────────────────────────
+// Helper: busca participante e garante que pertence à caixinha do usuário
+// ─────────────────────────────────────────
+async function getParticipantOrThrow(
+  db: Awaited<ReturnType<typeof getDb>>,
+  participantId: number,
+  caixinhaId: number
+) {
+  const [p] = await db
+    .select()
+    .from(participants)
+    .where(
+      and(
+        eq(participants.id, participantId),
+        eq(participants.caixinhaId, caixinhaId)
+      )
+    )
+    .limit(1);
+
+  if (!p) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Participante não encontrado.",
+    });
+  }
+  return p;
+}
+
+// ─────────────────────────────────────────
+// Schemas Zod reutilizáveis
+// ─────────────────────────────────────────
+const monthSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}$/, 'Formato inválido. Use "YYYY-MM"');
+
+const participantIdSchema = z.number().int().positive();
 
 export const appRouter = router({
   system: systemRouter,
+
   auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
+    me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true,
-      } as const;
+      return { success: true } as const;
     }),
   }),
 
   caixinha: router({
-    listParticipants: protectedProcedure.query(async () => {
+
+    // ──────────────────────────────────────
+    // GET OR CREATE CAIXINHA
+    // Chamado no login — garante que o usuário sempre tem uma caixinha
+    // ──────────────────────────────────────
+ getOrCreateCaixinha: protectedProcedure.mutation(async ({ ctx }) => {
+  const db = await getDb();
+
+  const [existing] = await db
+    .select()
+    .from(caixinhaMetadata)
+    .where(eq(caixinhaMetadata.ownerId, ctx.user.id))
+    .limit(1);
+
+  if (existing) return existing;
+
+  try {
+    await db.insert(caixinhaMetadata).values({
+      ownerId: ctx.user.id,
+      name: "Minha Caixinha",
+    });
+  } catch (e: any) {
+    // ← vai aparecer no terminal agora
+    console.error("❌ INSERT ERRO COMPLETO:", e?.cause ?? e);
+    throw e;
+  }
+
+  const [created] = await db
+    .select()
+    .from(caixinhaMetadata)
+    .where(eq(caixinhaMetadata.ownerId, ctx.user.id))
+    .limit(1);
+
+  return created;
+}),
+
+
+    // ──────────────────────────────────────
+    // BALANCETE
+    // ──────────────────────────────────────
+    getBalancete: protectedProcedure.query(async ({ ctx }) => {
       const db = await getDb();
-      if (!db) throw new Error("Banco de dados indisponível. Tente novamente em alguns momentos.");
-      const participantsList = await db.select().from(participants);
-      
-      const enrichedParticipants = await Promise.all(
-        participantsList.map(async (participant) => {
-          const payments = await db.select().from(monthlyPayments)
-            .where(eq(monthlyPayments.participantId, participant.id));
-          return {
-            ...participant,
-            monthlyPayments: payments,
-          };
+      const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
+      const [saldo] = await db
+        .select({
+          caixaLivre: sql<number>`
+            COALESCE(SUM(
+              CASE
+                WHEN ${transactions.type} IN ('payment', 'amortization') THEN ${transactions.amount}
+                WHEN ${transactions.type} = 'loan' THEN -${transactions.amount}
+                ELSE 0
+              END
+            ), 0)`,
+          totalRendimentos: sql<number>`
+            COALESCE(SUM(
+              CASE WHEN ${transactions.type} = 'payment' THEN ${transactions.amount} - 200 ELSE 0 END
+            ), 0)`,
         })
-      );
-      
-      return enrichedParticipants;
+        .from(transactions)
+        .innerJoin(participants, eq(participants.id, transactions.participantId))
+        .where(eq(participants.caixinhaId, caixinha.id));
+
+      const [{ contasAReceber }] = await db
+        .select({
+          contasAReceber: sql<number>`COALESCE(SUM(current_debt), 0)`,
+        })
+        .from(participants)
+        .where(eq(participants.caixinhaId, caixinha.id));
+
+      const now = new Date();
+      const currentMonthFormatted = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const currentYear = now.getFullYear();
+
+      const [{ totalParticipants }] = await db
+        .select({ totalParticipants: sql<number>`COUNT(*)` })
+        .from(participants)
+        .where(eq(participants.caixinhaId, caixinha.id));
+
+      const [{ pagosNesteMes }] = await db
+        .select({ pagosNesteMes: sql<number>`COUNT(*)` })
+        .from(monthlyPayments)
+        .innerJoin(participants, eq(participants.id, monthlyPayments.participantId))
+        .where(
+          and(
+            eq(participants.caixinhaId, caixinha.id),
+            eq(monthlyPayments.month, currentMonthFormatted),
+            eq(monthlyPayments.year, currentYear),
+            eq(monthlyPayments.paid, true)
+          )
+        );
+
+      const patrimonioTotal = new Decimal(saldo.caixaLivre).add(new Decimal(contasAReceber));
+
+      return {
+        caixaLivre: new Decimal(saldo.caixaLivre).toFixed(2),
+        contasAReceber: new Decimal(contasAReceber).toFixed(2),
+        patrimonioTotal: patrimonioTotal.toFixed(2),
+        totalRendimentos: new Decimal(saldo.totalRendimentos).toFixed(2),
+        inadimplencia: Math.max(0, Number(totalParticipants) - Number(pagosNesteMes)),
+        mesAtual: currentMonthFormatted,
+      };
     }),
 
-    addParticipant: protectedProcedure
-      .input(z.object({
-        name: z.string().min(1),
-        email: z.string().email().optional(),
-        totalLoan: z.number().min(0).default(0),
-      }))
-      .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        const newParticipant = {
-          name: input.name,
-          email: input.email || null,
-          totalLoan: input.totalLoan.toString(),
-          currentDebt: input.totalLoan.toString(),
-        };
-        const result = await db.insert(participants).values(newParticipant);
-        return result;
-      }),
-
-    updateParticipantEmail: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-        email: z.string().email().optional(),
-      }))
-      .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        const participant = await db.select().from(participants).where(eq(participants.id, input.participantId)).limit(1);
-        if (participant.length === 0) throw new Error("Participant not found");
-        await db.update(participants)
-          .set({ email: input.email || null })
-          .where(eq(participants.id, input.participantId));
-        return { success: true, message: "Email atualizado com sucesso!" };
-      }),
-
-    addLoan: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-        amount: z.number().min(0),
-      }))
-      .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        const participant = await db.select().from(participants).where(eq(participants.id, input.participantId)).limit(1);
-        if (participant.length === 0) throw new Error("Participant not found");
-        const p = participant[0];
-        const newTotalLoan = parseFloat(p.totalLoan.toString()) + input.amount;
-        const newCurrentDebt = parseFloat(p.currentDebt.toString()) + input.amount;
-        await db.update(participants)
-          .set({
-            totalLoan: newTotalLoan.toString(),
-            currentDebt: newCurrentDebt.toString(),
-          })
-          .where(eq(participants.id, input.participantId));
-        const transaction = {
-          participantId: input.participantId,
-          type: "loan" as const,
-          amount: input.amount.toString(),
-          description: `Emprestimo adicional de R$ ${input.amount.toFixed(2)}`,
-        };
-        await db.insert(transactions).values(transaction);
-        return { success: true };
-      }),
-
-    registerPayment: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-        month: z.string(),
-        year: z.number(),
-      }))
-      .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        const participant = await db.select().from(participants).where(eq(participants.id, input.participantId)).limit(1);
-        if (participant.length === 0) throw new Error("Participant not found");
-        const p = participant[0];
-        const currentDebt = parseFloat(p.currentDebt.toString());
-        const monthlyInterest = currentDebt * 0.10;
-        const totalPayment = 200 + monthlyInterest;
-        
-        // Check if payment for this month/year already exists and is already paid
-        const existingPayment = await db.select().from(monthlyPayments)
-          .where(and(
-            eq(monthlyPayments.participantId, input.participantId),
-            eq(monthlyPayments.month, input.month),
-            eq(monthlyPayments.year, input.year)
-          ))
-          .limit(1);
-        
-        if (existingPayment.length > 0 && existingPayment[0].paid === 1) {
-          // Mês já foi pago - não permitir pagamento duplicado
-          throw new Error(`Este mês (${input.month}/${input.year}) já foi pago. Não é permitido pagar o mesmo mês duas vezes.`);
-        }
-        
-        if (existingPayment.length > 0) {
-          // Atualizar pagamento existente (estava pendente)
-          await db.update(monthlyPayments)
-            .set({ paid: 1 })
-            .where(eq(monthlyPayments.id, existingPayment[0].id));
-        } else {
-          // Criar novo registro de pagamento
-          await db.insert(monthlyPayments).values({
-            participantId: input.participantId,
-            month: input.month,
-            year: input.year,
-            paid: 1,
-          });
-        }
-
-        // Registrar transação
-        const transaction = {
-          participantId: input.participantId,
-          type: "payment" as const,
-          amount: totalPayment.toString(),
-          month: input.month,
-          year: input.year,
-          description: `Pagamento mensal (Cota R$ 200 + Juros R$ ${monthlyInterest.toFixed(2)})`,
-        };
-        await db.insert(transactions).values(transaction);
-        
-        // Log auditoria
-        await db.insert(auditLog).values({
-          participantId: input.participantId,
-          participantName: p.name,
-          action: "payment_marked",
-          month: input.month,
-          year: input.year,
-          amount: totalPayment.toString(),
-          description: `Pagamento marcado como pago`,
-        });
-        
-        // Enviar email de confirmacao (nao bloqueia se falhar)
-        if (p.email) {
-          sendPaymentConfirmationEmail({
-            participantName: p.name,
-            participantEmail: p.email,
-            amount: totalPayment,
-            paymentType: 'monthly',
-            month: input.month,
-            year: input.year.toString(),
-            totalDebt: currentDebt,
-            caixinhaName: 'Caixinha Comunitaria',
-          }).catch(err => console.error('Failed to send email:', err));
-        }
-        
-        return { success: true, message: `Pagamento de ${input.month}/${input.year} registrado com sucesso!` };
-      }),
-
-    unmarkPayment: protectedProcedure
-      .input(z.object({
-        paymentId: z.number(),
-        participantId: z.number(),
-      }))
-      .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        
-        const payment = await db.select().from(monthlyPayments)
-          .where(eq(monthlyPayments.id, input.paymentId))
-          .limit(1);
-        
-        if (payment.length === 0) throw new Error("Payment not found");
-        
-        const p = payment[0];
-        const participant = await db.select().from(participants)
-          .where(eq(participants.id, input.participantId))
-          .limit(1);
-        
-        if (participant.length === 0) throw new Error("Participant not found");
-        
-        // Desmarcar pagamento
-        await db.update(monthlyPayments)
-          .set({ paid: 0 })
-          .where(eq(monthlyPayments.id, input.paymentId));
-        
-        // Deletar transação correspondente para recalcular totais
-        await db.delete(transactions)
-          .where(and(
-            eq(transactions.participantId, input.participantId),
-            eq(transactions.type, "payment"),
-            eq(transactions.month, p.month),
-            eq(transactions.year, p.year)
-          ));
-        
-        // Log auditoria
-        await db.insert(auditLog).values({
-          participantId: input.participantId,
-          participantName: participant[0].name,
-          action: "payment_unmarked",
-          month: p.month,
-          year: p.year,
-          description: `Pagamento desmarcado como pago`,
-        });
-        
-        return { success: true, message: `Pagamento de ${p.month}/${p.year} foi desmarcado. (Transações deletadas)` };
-      }),
-
-    registerAmortization: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-        amount: z.number().min(0),
-      }))
-      .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        const participant = await db.select().from(participants).where(eq(participants.id, input.participantId)).limit(1);
-        if (participant.length === 0) throw new Error("Participant not found");
-        const p = participant[0];
-        const currentDebt = parseFloat(p.currentDebt.toString());
-        
-        // Validar se o valor de amortização não ultrapassa a dívida atual
-        if (input.amount > currentDebt) {
-          throw new Error(`Valor de amortização (R$ ${input.amount.toFixed(2)}) não pode ser maior que a dívida atual (R$ ${currentDebt.toFixed(2)}).`);
-        }
-        
-        const newCurrentDebt = Math.max(0, currentDebt - input.amount);
-        await db.update(participants)
-          .set({
-            currentDebt: newCurrentDebt.toString(),
-          })
-          .where(eq(participants.id, input.participantId));
-        const transaction = {
-          participantId: input.participantId,
-          type: "amortization" as const,
-          amount: input.amount.toString(),
-          description: `Amortizacao de R$ ${input.amount.toFixed(2)}`,
-        };
-        await db.insert(transactions).values(transaction);
-        
-        // Log auditoria
-        await db.insert(auditLog).values({
-          participantId: input.participantId,
-          participantName: p.name,
-          action: "amortization_added",
-          amount: input.amount.toString(),
-          description: `Amortização de R$ ${input.amount.toFixed(2)} registrada`,
-        });
-        
-        return { success: true };
-      }),
-
-    resetMonth: protectedProcedure.mutation(async () => {
+    // ──────────────────────────────────────
+    // LIST PARTICIPANTS
+    // ──────────────────────────────────────
+    listParticipants: protectedProcedure.query(async ({ ctx }) => {
       const db = await getDb();
-      if (!db) throw new Error("Database not available");
-      const allPayments = await db.select().from(monthlyPayments);
-      for (const payment of allPayments) {
-        await db.update(monthlyPayments)
-          .set({ paid: 0 })
-          .where(eq(monthlyPayments.id, payment.id));
-      }
-      return { success: true };
+      const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
+      const rows = await db
+        .select()
+        .from(participants)
+        .leftJoin(monthlyPayments, eq(monthlyPayments.participantId, participants.id))
+        .where(eq(participants.caixinhaId, caixinha.id));
+
+      const grouped = rows.reduce((acc: Record<number, any>, row) => {
+        const id = row.participants.id;
+        if (!acc[id]) acc[id] = { ...row.participants, monthlyPayments: [] };
+        if (row.monthlyPayments) acc[id].monthlyPayments.push(row.monthlyPayments);
+        return acc;
+      }, {});
+
+      return Object.values(grouped);
     }),
 
+    // ──────────────────────────────────────
+    // GET MONTHLY PAYMENTS
+    // ──────────────────────────────────────
     getMonthlyPayments: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-      }))
-      .query(async ({ input }) => {
+      .input(z.object({ participantId: participantIdSchema }))
+      .query(async ({ input, ctx }) => {
         const db = await getDb();
-        if (!db) throw new Error("Banco de dados indisponível. Tente novamente em alguns momentos.");
-        const result = await db.select().from(monthlyPayments).where(eq(monthlyPayments.participantId, input.participantId));
-        return result;
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+        await getParticipantOrThrow(db, input.participantId, caixinha.id);
+
+        return db
+          .select()
+          .from(monthlyPayments)
+          .where(eq(monthlyPayments.participantId, input.participantId));
       }),
 
+    // ──────────────────────────────────────
+    // GET TRANSACTIONS
+    // ──────────────────────────────────────
     getTransactions: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-      }))
-      .query(async ({ input }) => {
+      .input(z.object({ participantId: participantIdSchema }))
+      .query(async ({ input, ctx }) => {
         const db = await getDb();
-        if (!db) throw new Error("Banco de dados indisponível. Tente novamente em alguns momentos.");
-        const result = await db.select().from(transactions).where(eq(transactions.participantId, input.participantId));
-        return result;
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+        await getParticipantOrThrow(db, input.participantId, caixinha.id);
+
+        return db
+          .select()
+          .from(transactions)
+          .where(eq(transactions.participantId, input.participantId));
       }),
 
-    getAllTransactions: protectedProcedure.query(async () => {
+    // ──────────────────────────────────────
+    // GET ALL TRANSACTIONS
+    // ──────────────────────────────────────
+    getAllTransactions: protectedProcedure.query(async ({ ctx }) => {
       const db = await getDb();
-      if (!db) throw new Error("Banco de dados indisponível. Tente novamente em alguns momentos.");
-      const result = await db.select().from(transactions);
-      return result;
+      const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
+      return db
+        .select({ transactions })
+        .from(transactions)
+        .innerJoin(participants, eq(participants.id, transactions.participantId))
+        .where(eq(participants.caixinhaId, caixinha.id));
     }),
 
+    // ──────────────────────────────────────
+    // GET AUDIT LOG
+    // ──────────────────────────────────────
     getAuditLog: protectedProcedure
-      .input(z.object({
-        participantId: z.number().optional(),
-        limit: z.number().default(50),
-      }))
-      .query(async ({ input }) => {
+      .input(
+        z.object({
+          participantId: participantIdSchema.optional(),
+          limit: z.number().int().min(1).max(200).default(50),
+        })
+      )
+      .query(async ({ input, ctx }) => {
         const db = await getDb();
-        if (!db) throw new Error("Banco de dados indisponível. Tente novamente em alguns momentos.");
-        
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
         if (input.participantId) {
-          const result = await db.select().from(auditLog)
+          await getParticipantOrThrow(db, input.participantId, caixinha.id);
+          return db
+            .select()
+            .from(auditLog)
             .where(eq(auditLog.participantId, input.participantId))
-            .orderBy(auditLog.createdAt)
             .limit(input.limit);
-          return result;
         }
-        
-        const result = await db.select().from(auditLog)
-          .orderBy(auditLog.createdAt)
+
+        return db
+          .select({ auditLog })
+          .from(auditLog)
+          .innerJoin(participants, eq(participants.id, auditLog.participantId))
+          .where(eq(participants.caixinhaId, caixinha.id))
           .limit(input.limit);
-        return result;
       }),
 
-    updateMonthlyPayment: protectedProcedure
-      .input(z.object({
-        paymentId: z.number(),
-        month: z.string(),
-        year: z.number(),
-      }))
-      .mutation(async ({ input }) => {
+    // ──────────────────────────────────────
+    // ADD PARTICIPANT
+    // ──────────────────────────────────────
+    addParticipant: protectedProcedure
+      .input(
+        z.object({
+          name: z.string().min(1, "Nome obrigatório").max(255),
+          email: z.string().email("Email inválido").max(320).optional(),
+          totalLoan: z.coerce.number().nonnegative().max(999999.99).default(0),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
         const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        await db.update(monthlyPayments)
-          .set({
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
+        return db.transaction(async (tx) => {
+          const result = await tx.insert(participants).values({
+            caixinhaId: caixinha.id,
+            name: input.name,
+            email: input.email ?? null,
+            totalLoan: input.totalLoan.toString(),
+            currentDebt: input.totalLoan.toString(),
+          });
+
+          await tx.insert(auditLog).values({
+            participantId: Number(result[0].insertId),
+            participantName: input.name,
+            action: "participant_created",
+            description: `Participante criado com empréstimo inicial de R$ ${input.totalLoan.toFixed(2)}`,
+          });
+
+          return { success: true };
+        });
+      }),
+
+    // ──────────────────────────────────────
+    // ADD LOAN
+    // ──────────────────────────────────────
+    addLoan: protectedProcedure
+      .input(
+        z.object({
+          participantId: participantIdSchema,
+          amount: z.coerce.number().positive("Valor deve ser positivo").max(999999.99),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
+        return db.transaction(async (tx) => {
+          const [p] = await tx
+            .select()
+            .from(participants)
+            .where(
+              and(
+                eq(participants.id, input.participantId),
+                eq(participants.caixinhaId, caixinha.id)
+              )
+            )
+            .for("update")
+            .limit(1);
+
+          if (!p) throw new TRPCError({ code: "NOT_FOUND" });
+
+          const balanceBefore = new Decimal(p.currentDebt);
+          const loanAmount = new Decimal(input.amount);
+          const newTotalLoan = new Decimal(p.totalLoan).add(loanAmount);
+          const balanceAfter = balanceBefore.add(loanAmount);
+
+          await tx
+            .update(participants)
+            .set({
+              totalLoan: newTotalLoan.toFixed(2),
+              currentDebt: balanceAfter.toFixed(2),
+            })
+            .where(eq(participants.id, input.participantId));
+
+          await tx.insert(transactions).values({
+            participantId: input.participantId,
+            type: "loan",
+            amount: loanAmount.toFixed(2),
+            balanceBefore: balanceBefore.toFixed(2),
+            balanceAfter: balanceAfter.toFixed(2),
+            description: `Empréstimo adicional de R$ ${loanAmount.toFixed(2)}`,
+          });
+
+          return { success: true };
+        });
+      }),
+
+    // ──────────────────────────────────────
+    // REGISTER PAYMENT
+    // ──────────────────────────────────────
+    registerPayment: protectedProcedure
+      .input(
+        z.object({
+          participantId: participantIdSchema,
+          month: monthSchema,
+          year: z.number().int().min(2020).max(2100),
+          idempotencyKey: z.string().uuid().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
+        return db.transaction(async (tx) => {
+          const [p] = await tx
+            .select()
+            .from(participants)
+            .where(
+              and(
+                eq(participants.id, input.participantId),
+                eq(participants.caixinhaId, caixinha.id)
+              )
+            )
+            .for("update")
+            .limit(1);
+
+          if (!p) throw new TRPCError({ code: "NOT_FOUND" });
+
+          const currentDebt = new Decimal(p.currentDebt);
+          const { interest, total } = calcMonthlyPayment(currentDebt);
+
+          const existingPayment = await tx
+            .select()
+            .from(monthlyPayments)
+            .where(
+              and(
+                eq(monthlyPayments.participantId, input.participantId),
+                eq(monthlyPayments.month, input.month),
+                eq(monthlyPayments.year, input.year)
+              )
+            )
+            .limit(1);
+
+          if (existingPayment.length > 0 && existingPayment[0].paid === true) {
+            throw new TRPCError({ code: "CONFLICT", message: "Mês já pago." });
+          }
+
+          if (existingPayment.length > 0) {
+            await tx
+              .update(monthlyPayments)
+              .set({ paid: true })
+              .where(eq(monthlyPayments.id, existingPayment[0].id));
+          } else {
+            await tx.insert(monthlyPayments).values({
+              participantId: input.participantId,
+              month: input.month,
+              year: input.year,
+              paid: true,
+            });
+          }
+
+          await tx.insert(transactions).values({
+            participantId: input.participantId,
+            type: "payment",
+            amount: total.toFixed(2),
+            balanceBefore: currentDebt.toFixed(2),
+            balanceAfter: currentDebt.toFixed(2),
             month: input.month,
             year: input.year,
-          })
-          .where(eq(monthlyPayments.id, input.paymentId));
-        return { success: true };
+            description: `Cota R$ 200,00 + Juros R$ ${interest.toFixed(2)}`,
+            idempotencyKey: input.idempotencyKey,
+          });
+
+          await tx.insert(auditLog).values({
+            participantId: input.participantId,
+            participantName: p.name,
+            action: "payment_marked",
+            month: input.month,
+            year: input.year,
+            amount: total.toFixed(2),
+            description: `Pagamento registrado: R$ ${total.toFixed(2)}`,
+          });
+
+          return { success: true };
+        });
       }),
 
-    updateParticipantLoan: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-        newTotalLoan: z.number().min(0),
-      }))
-      .mutation(async ({ input }) => {
+    // ──────────────────────────────────────
+    // REGISTER AMORTIZATION
+    // ──────────────────────────────────────
+    registerAmortization: protectedProcedure
+      .input(
+        z.object({
+          participantId: participantIdSchema,
+          amount: z.coerce.number().positive("Valor deve ser positivo").max(999999.99),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
         const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        const participant = await db.select().from(participants).where(eq(participants.id, input.participantId)).limit(1);
-        if (participant.length === 0) throw new Error("Participant not found");
-        const p = participant[0];
-        const currentDebt = parseFloat(p.currentDebt.toString());
-        const oldTotalLoan = parseFloat(p.totalLoan.toString());
-        const difference = input.newTotalLoan - oldTotalLoan;
-        const newCurrentDebt = Math.max(0, currentDebt + difference);
-        await db.update(participants)
-          .set({
-            totalLoan: input.newTotalLoan.toString(),
-            currentDebt: newCurrentDebt.toString(),
-          })
-          .where(eq(participants.id, input.participantId));
-        return { success: true };
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
+        return db.transaction(async (tx) => {
+          const [p] = await tx
+            .select()
+            .from(participants)
+            .where(
+              and(
+                eq(participants.id, input.participantId),
+                eq(participants.caixinhaId, caixinha.id)
+              )
+            )
+            .for("update")
+            .limit(1);
+
+          if (!p) throw new TRPCError({ code: "NOT_FOUND" });
+
+          const currentDebt = new Decimal(p.currentDebt);
+
+          if (new Decimal(input.amount).gt(currentDebt)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Amortização de R$ ${input.amount.toFixed(2)} excede a dívida atual de R$ ${currentDebt.toFixed(2)}.`,
+            });
+          }
+
+          const amountDecimal = new Decimal(input.amount);
+          const balanceAfter = currentDebt.sub(amountDecimal);
+
+          await tx
+            .update(participants)
+            .set({ currentDebt: balanceAfter.toFixed(2) })
+            .where(eq(participants.id, input.participantId));
+
+          await tx.insert(transactions).values({
+            participantId: input.participantId,
+            type: "amortization",
+            amount: amountDecimal.toFixed(2),
+            balanceBefore: currentDebt.toFixed(2),
+            balanceAfter: balanceAfter.toFixed(2),
+            description: `Amortização de R$ ${amountDecimal.toFixed(2)}`,
+          });
+
+          await tx.insert(auditLog).values({
+            participantId: input.participantId,
+            participantName: p.name,
+            action: "amortization_added",
+            amount: amountDecimal.toFixed(2),
+            description: `Dívida reduzida de R$ ${currentDebt.toFixed(2)} para R$ ${balanceAfter.toFixed(2)}`,
+          });
+
+          return { success: true };
+        });
       }),
 
-    updateParticipantDebt: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-        newCurrentDebt: z.number().min(0),
-      }))
-      .mutation(async ({ input }) => {
+    // ──────────────────────────────────────
+    // UNMARK PAYMENT
+    // ──────────────────────────────────────
+    unmarkPayment: protectedProcedure
+      .input(
+        z.object({
+          paymentId: z.number().int().positive(),
+          participantId: participantIdSchema,
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
         const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        const participant = await db.select().from(participants).where(eq(participants.id, input.participantId)).limit(1);
-        if (participant.length === 0) throw new Error("Participant not found");
-        await db.update(participants)
-          .set({
-            currentDebt: input.newCurrentDebt.toString(),
-          })
-          .where(eq(participants.id, input.participantId));
-        return { success: true };
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+        await getParticipantOrThrow(db, input.participantId, caixinha.id);
+
+        return db.transaction(async (tx) => {
+          const [payment] = await tx
+            .select()
+            .from(monthlyPayments)
+            .where(eq(monthlyPayments.id, input.paymentId))
+            .limit(1);
+
+          if (!payment) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Pagamento não encontrado." });
+          }
+
+          await tx
+            .update(monthlyPayments)
+            .set({ paid: false })
+            .where(eq(monthlyPayments.id, input.paymentId));
+
+          await tx.delete(transactions).where(
+            and(
+              eq(transactions.participantId, input.participantId),
+              eq(transactions.type, "payment"),
+              eq(transactions.month, payment.month!),
+              eq(transactions.year, payment.year!)
+            )
+          );
+
+          await tx.insert(auditLog).values({
+            participantId: input.participantId,
+            participantName: "",
+            action: "payment_unmarked",
+            month: payment.month!,
+            year: payment.year!,
+            description: `Pagamento de ${payment.month}/${payment.year} desmarcado`,
+          });
+
+          return { success: true };
+        });
       }),
 
+    // ──────────────────────────────────────
+    // UPDATE PARTICIPANT NAME
+    // ──────────────────────────────────────
     updateParticipantName: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-        newName: z.string().min(1),
-      }))
-      .mutation(async ({ input }) => {
+      .input(
+        z.object({
+          participantId: participantIdSchema,
+          newName: z.string().min(1).max(255),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
         const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        const participant = await db.select().from(participants).where(eq(participants.id, input.participantId)).limit(1);
-        if (participant.length === 0) throw new Error("Participant not found");
-        await db.update(participants)
-          .set({
-            name: input.newName,
-          })
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+        await getParticipantOrThrow(db, input.participantId, caixinha.id);
+
+        await db
+          .update(participants)
+          .set({ name: input.newName })
           .where(eq(participants.id, input.participantId));
+
         return { success: true };
       }),
 
+    // ──────────────────────────────────────
+    // DELETE PARTICIPANT
+    // ──────────────────────────────────────
     deleteParticipant: protectedProcedure
-      .input(z.object({
-        participantId: z.number(),
-      }))
-      .mutation(async ({ input }) => {
+      .input(z.object({ participantId: participantIdSchema }))
+      .mutation(async ({ input, ctx }) => {
         const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        await db.delete(transactions).where(eq(transactions.participantId, input.participantId));
-        await db.delete(monthlyPayments).where(eq(monthlyPayments.participantId, input.participantId));
-        await db.delete(participants).where(eq(participants.id, input.participantId));
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+        const p = await getParticipantOrThrow(db, input.participantId, caixinha.id);
+
+        return db.transaction(async (tx) => {
+          await tx.delete(auditLog).where(eq(auditLog.participantId, input.participantId));
+          await tx.delete(monthlyPayments).where(eq(monthlyPayments.participantId, input.participantId));
+          await tx.delete(transactions).where(eq(transactions.participantId, input.participantId));
+          await tx.delete(participants).where(eq(participants.id, input.participantId));
+
+          return { success: true };
+        });
+      }),
+
+    // ──────────────────────────────────────
+    // RESET MONTH
+    // ──────────────────────────────────────
+    resetMonth: protectedProcedure
+      .input(
+        z.object({
+          month: monthSchema,
+          year: z.number().int().min(2020).max(2100),
+        }).optional()
+      )
+      .mutation(async ({ ctx, input }) => {
+        const db = await getDb();
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
+        const now = new Date();
+        const month = input?.month ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        const year = input?.year ?? now.getFullYear();
+
+        return db.transaction(async (tx) => {
+          const payments = await tx
+            .select({ mp: monthlyPayments })
+            .from(monthlyPayments)
+            .innerJoin(participants, eq(participants.id, monthlyPayments.participantId))
+            .where(
+              and(
+                eq(participants.caixinhaId, caixinha.id),
+                eq(monthlyPayments.month, month),
+                eq(monthlyPayments.year, year),
+                eq(monthlyPayments.paid, true)
+              )
+            );
+
+          if (payments.length === 0) return { success: true, reset: 0 };
+
+          for (const { mp } of payments) {
+            await tx
+              .update(monthlyPayments)
+              .set({ paid: false })
+              .where(eq(monthlyPayments.id, mp.id));
+
+            await tx.delete(transactions).where(
+              and(
+                eq(transactions.participantId, mp.participantId),
+                eq(transactions.type, "payment"),
+                eq(transactions.month, month),
+                eq(transactions.year, year)
+              )
+            );
+          }
+
+          return { success: true, reset: payments.length };
+        });
+      }),
+
+    // ──────────────────────────────────────
+    // UPDATE PARTICIPANT LOAN
+    // ──────────────────────────────────────
+    updateParticipantLoan: protectedProcedure
+      .input(
+        z.object({
+          participantId: participantIdSchema,
+          newTotalLoan: z.coerce.number().nonnegative().max(999999.99),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+        await getParticipantOrThrow(db, input.participantId, caixinha.id);
+
+        await db
+          .update(participants)
+          .set({ totalLoan: new Decimal(input.newTotalLoan).toFixed(2) })
+          .where(eq(participants.id, input.participantId));
+
         return { success: true };
       }),
-  }),
-});
+
+    // ──────────────────────────────────────
+    // UPDATE PARTICIPANT DEBT
+    // ──────────────────────────────────────
+    updateParticipantDebt: protectedProcedure
+      .input(
+        z.object({
+          participantId: participantIdSchema,
+          newCurrentDebt: z.coerce.number().nonnegative().max(999999.99),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+        const p = await getParticipantOrThrow(db, input.participantId, caixinha.id);
+
+        const balanceBefore = new Decimal(p.currentDebt);
+        const balanceAfter = new Decimal(input.newCurrentDebt);
+
+        return db.transaction(async (tx) => {
+          await tx
+            .update(participants)
+            .set({ currentDebt: balanceAfter.toFixed(2) })
+            .where(eq(participants.id, input.participantId));
+
+          await tx.insert(auditLog).values({
+            participantId: input.participantId,
+            participantName: p.name,
+            action: "amortization_added",
+            amount: balanceBefore.sub(balanceAfter).abs().toFixed(2),
+            description: `Saldo ajustado manualmente: R$ ${balanceBefore.toFixed(2)} → R$ ${balanceAfter.toFixed(2)}`,
+          });
+
+          return { success: true };
+        });
+      }),
+
+    // ──────────────────────────────────────
+    // UPDATE PARTICIPANT EMAIL
+    // ──────────────────────────────────────
+    updateParticipantEmail: protectedProcedure
+      .input(
+        z.object({
+          participantId: participantIdSchema,
+          email: z.string().email("Email inválido").max(320).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const db = await getDb();
+        const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+        await getParticipantOrThrow(db, input.participantId, caixinha.id);
+
+        await db
+          .update(participants)
+          .set({ email: input.email ?? null })
+          .where(eq(participants.id, input.participantId));
+
+        return { success: true };
+      }),
+
+  }), // fim caixinha router
+}); // fim appRouter
 
 export type AppRouter = typeof appRouter;

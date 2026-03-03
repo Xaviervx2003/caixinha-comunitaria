@@ -47,6 +47,7 @@ type Transaction = {
 type AuditEntry = {
   id: number;
   participantId: number;
+  participantName: string; 
   action: string;
   description?: string;
   createdAt?: string | Date | null;
@@ -54,8 +55,18 @@ type AuditEntry = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MONTHS = [
-  'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
-  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'
+  { value: '01', label: 'Janeiro' },
+  { value: '02', label: 'Fevereiro' },
+  { value: '03', label: 'Março' },
+  { value: '04', label: 'Abril' },
+  { value: '05', label: 'Maio' },
+  { value: '06', label: 'Junho' },
+  { value: '07', label: 'Julho' },
+  { value: '08', label: 'Agosto' },
+  { value: '09', label: 'Setembro' },
+  { value: '10', label: 'Outubro' },
+  { value: '11', label: 'Novembro' },
+  { value: '12', label: 'Dezembro' },
 ];
 
 export default function Home() {
@@ -75,6 +86,15 @@ export default function Home() {
   const { data: auditLogEntries = [] } = trpc.caixinha.getAuditLog.useQuery({ limit: 50 }, {
     enabled: isAuthenticated,
   }) as { data: AuditEntry[] };
+  
+    const getOrCreateCaixinhaMutation = trpc.caixinha.getOrCreateCaixinha.useMutation({
+  onSuccess: (data) => {
+    console.log("✅ Caixinha criada/encontrada:", data);
+  },
+  onError: (error) => {
+    console.error("❌ Erro ao criar caixinha:", error.message);
+  },
+});
 
   // Cache data when it changes
   useEffect(() => {
@@ -106,9 +126,7 @@ export default function Home() {
       utils.caixinha.listParticipants.invalidate();
       utils.caixinha.getAllTransactions.invalidate();
       utils.caixinha.getMonthlyPayments.invalidate();
-      if (data.message) {
-        showSuccessToast(data.message);
-      }
+      utils.caixinha.getAuditLog.invalidate();
     },
     onError: (error) => {
       const errorMessage = error.message || 'Erro ao registrar pagamento';
@@ -119,11 +137,7 @@ export default function Home() {
     onSuccess: (data) => {
       utils.caixinha.listParticipants.invalidate();
       utils.caixinha.getAllTransactions.invalidate();
-      utils.caixinha.getMonthlyPayments.invalidate();
-      utils.caixinha.getAuditLog.invalidate();
-      if (data.message) {
-        showSuccessToast(data.message);
-      }
+      utils.caixinha.getMonthlyPayments.invalidate();      utils.caixinha.getAuditLog.invalidate();
     },
     onError: (error) => {
       const errorMessage = error.message || 'Erro ao desmarcar pagamento';
@@ -195,7 +209,9 @@ export default function Home() {
   const [editDebtAmount, setEditDebtAmount] = useState('');
   const [editNameValue, setEditNameValue] = useState('');
   const [editEmailValue, setEditEmailValue] = useState('');
-  const [paymentMonth, setPaymentMonth] = useState(MONTHS[new Date().getMonth()]);
+  const [paymentMonth, setPaymentMonth] = useState(
+  String(new Date().getMonth() + 1).padStart(2, '0') // "03" em vez de "março"
+);
   const [paymentYear, setPaymentYear] = useState(new Date().getFullYear().toString());
 
   const selectedParticipant = participants.find((p: Participant) => p.id === selectedParticipantId);
@@ -225,16 +241,20 @@ export default function Home() {
 
   // ── Handlers (devem ficar ANTES de qualquer return condicional) ────────────
   const handleAddParticipant = async () => {
-    if (!newParticipantName.trim()) {
-      showErrorToast('Nome do participante é obrigatório');
-      return;
-    }
+  if (!newParticipantName.trim()) {
+    showErrorToast('Nome do participante é obrigatório');
+    return;
+  }
 
-    const loanAmount = newParticipantLoan ? parseFloat(newParticipantLoan) : 0;
-    if (isNaN(loanAmount) || loanAmount < 0) {
-      showErrorToast('Valor do empréstimo inválido');
-      return;
-    }
+  // ✅ Garante que a caixinha existe antes de tentar adicionar
+  try {
+    await getOrCreateCaixinhaMutation.mutateAsync();
+  } catch (e) {
+    showErrorToast('Erro ao inicializar caixinha');
+    return;
+  }
+
+  // ... resto do handler continua igual
 
     try {
       await addParticipantMutation.mutateAsync({
@@ -274,21 +294,22 @@ export default function Home() {
     }
   };
 
-  const handlePayment = async () => {
-    if (!selectedParticipantId) return;
-
-    try {
-      await paymentMutation.mutateAsync({
-        participantId: selectedParticipantId,
-        month: paymentMonth,
-        year: parseInt(paymentYear),
-      });
-      setIsPaymentOpen(false);
-      showSuccessToast(`Pagamento de ${paymentMonth}/${paymentYear} registrado!`);
-    } catch (error) {
-      showErrorToast('Erro ao registrar pagamento');
-    }
-  };
+const handlePayment = async () => {
+  if (!selectedParticipantId) return;
+  try {
+    const monthFormatted = `${paymentYear}-${paymentMonth}`; // "2025-03"
+    await paymentMutation.mutateAsync({
+      participantId: selectedParticipantId,
+      month: monthFormatted,
+      year: parseInt(paymentYear),
+    });
+    setIsPaymentOpen(false);
+    const monthLabel = MONTHS.find(m => m.value === paymentMonth)?.label ?? paymentMonth;
+    showSuccessToast(`Pagamento de ${monthLabel}/${paymentYear} registrado!`);
+  } catch (error) {
+    showErrorToast('Erro ao registrar pagamento');
+  }
+};
 
   const handleAmortize = async () => {
     if (!selectedParticipantId || !amortizeAmount) return;
@@ -318,16 +339,21 @@ export default function Home() {
     }
   };
 
-  const handleResetMonth = async () => {
-    try {
-      await resetMonthMutation.mutateAsync();
-      setIsResetConfirmOpen(false);
-      showSuccessToast('Mês resetado! Todos os pagamentos foram zerados.');
-    } catch (error) {
-      showErrorToast('Erro ao resetar mês');
-    }
-  };
-
+  
+const handleResetMonth = async () => {
+  try {
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    await resetMonthMutation.mutateAsync({
+      month,
+      year: now.getFullYear(),
+    });
+    setIsResetConfirmOpen(false);
+    showSuccessToast('Mês resetado! Todos os pagamentos foram zerados.');
+  } catch (error) {
+    showErrorToast('Erro ao resetar mês');
+  }
+};
   const handleResetMonthClick = () => {
     setIsResetConfirmOpen(true);
   };
@@ -436,6 +462,11 @@ export default function Home() {
       showErrorToast('Erro ao deletar participante');
     }
   };
+
+
+
+
+  
   // ── Fim dos handlers ──────────────────────────────────────────────────────
 
   if (!isAuthenticated) {
@@ -446,7 +477,7 @@ export default function Home() {
           <p className="text-lg mb-8 text-gray-600">Faça login para gerenciar sua caixinha</p>
           <Button
             onClick={() => window.location.href = getLoginUrl()}
-            className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase h-12 px-8"
+            className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase h-12 px-8"
           >
             Fazer Login
           </Button>
@@ -531,7 +562,7 @@ export default function Home() {
           <div className="flex gap-2 flex-wrap">
             <Button
               onClick={handleResetMonthClick}
-              className="bg-[#FF3D00] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
+              className="bg-[#FF3D00] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
             >
               <RotateCcw className="w-4 h-4 mr-1 sm:mr-2" /> <span className="hidden sm:inline">Resetar Mês</span><span className="sm:hidden">Resetar</span>
             </Button>
@@ -559,13 +590,13 @@ export default function Home() {
                   showErrorToast('Erro ao exportar backup');
                 }
               }}
-              className="bg-[#2196F3] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
+              className="bg-[#2196F3] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
             >
               <Download className="w-4 h-4 mr-1 sm:mr-2" /> <span className="hidden sm:inline">Exportar CSV</span><span className="sm:hidden">Export</span>
             </Button>
             <Button
               onClick={() => setIsImportOpen(true)}
-              className="bg-[#4CAF50] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
+              className="bg-[#4CAF50] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
             >
               <Upload className="w-4 h-4 mr-1 sm:mr-2" /> <span className="hidden sm:inline">Importar CSV</span><span className="sm:hidden">Import</span>
             </Button>
@@ -578,7 +609,7 @@ export default function Home() {
             <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-tight">Participantes</h2>
             <Button 
               onClick={() => setIsAddParticipantOpen(true)}
-              className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
+              className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
             >
               <Plus className="w-4 h-4 mr-1 sm:mr-2" /> <span className="hidden sm:inline">Novo Membro</span><span className="sm:hidden">Novo</span>
             </Button>
@@ -593,7 +624,7 @@ export default function Home() {
               <p className="text-gray-600 mb-4 text-sm sm:text-base">Nenhum participante adicionado ainda</p>
               <Button 
                 onClick={() => setIsAddParticipantOpen(true)}
-                className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
+                className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
               >
                 <Plus className="w-4 h-4 mr-1 sm:mr-2" /> Adicionar Primeiro Membro
               </Button>
@@ -628,12 +659,12 @@ export default function Home() {
                   }}
                   onEditLoan={() => {
                     setSelectedParticipantId(participant.id);
-                    setEditLoanAmount(parseFloat(participant.totalLoan).toString());
+                    setEditLoanAmount(parseFloat(participant.totalLoan.toString()).toString());
                     setIsEditLoanOpen(true);
                   }}
                   onEditDebt={() => {
                     setSelectedParticipantId(participant.id);
-                    setEditDebtAmount(parseFloat(participant.currentDebt).toString());
+                    setEditDebtAmount(parseFloat(participant.currentDebt.toString()).toString());
                     setIsEditDebtOpen(true);
                   }}
                   onEditName={() => {
@@ -718,7 +749,7 @@ export default function Home() {
             <Button 
               onClick={handleAddParticipant} 
               disabled={addParticipantMutation.isPending}
-              className="w-full bg-[#00C853] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
+              className="w-full bg-[#00C853] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
             >
               Adicionar Participante
             </Button>
@@ -752,7 +783,7 @@ export default function Home() {
             <Button 
               onClick={handleAddLoan}
               disabled={addLoanMutation.isPending}
-              className="w-full bg-[#00C853] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
+              className="w-full bg-[#00C853] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
             >
               Confirmar Empréstimo
             </Button>
@@ -778,9 +809,9 @@ export default function Home() {
                 onChange={(e) => setPaymentMonth(e.target.value)}
                 className="border-2 border-black rounded-none h-12 text-lg font-bold shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)] focus-visible:ring-0 focus-visible:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all px-3"
               >
-                {MONTHS.map(month => (
-                  <option key={month} value={month}>{month.charAt(0).toUpperCase() + month.slice(1)}</option>
-                ))}
+                {MONTHS.map(m => (
+  <option key={m.value} value={m.value}>{m.label}</option>
+))}
               </select>
             </div>
             <div className="grid gap-2">
@@ -801,7 +832,7 @@ export default function Home() {
             <Button 
               onClick={handlePayment}
               disabled={paymentMutation.isPending}
-              className="w-full bg-[#00C853] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
+              className="w-full bg-[#00C853] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
             >
               Confirmar Pagamento
             </Button>
@@ -835,7 +866,7 @@ export default function Home() {
             <Button 
               onClick={handleAmortize}
               disabled={amortizeMutation.isPending}
-              className="w-full bg-[#00C853] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
+              className="w-full bg-[#00C853] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
             >
               Confirmar Amortização
             </Button>
@@ -884,7 +915,7 @@ export default function Home() {
           <DialogFooter>
             <Button 
               onClick={() => setIsHistoryOpen(false)} 
-              className="w-full bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12"
+              className="w-full bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12"
             >
               Fechar
             </Button>
@@ -986,7 +1017,7 @@ export default function Home() {
             <Button 
               onClick={handleEditName}
               disabled={updateNameMutation.isPending}
-              className="w-full bg-blue-500 text-white border-2 border-blue-600 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
+              className="w-full bg-blue-500 text-white border-2 border-blue-600 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-black uppercase h-12 text-lg disabled:opacity-50"
             >
               Confirmar Edicao
             </Button>
