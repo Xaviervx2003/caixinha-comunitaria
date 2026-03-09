@@ -9,6 +9,7 @@ const POOL_CONFIG = {
   queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
+  multipleStatements: true, // ✅ necessário para db:migrate no TiDB Cloud
 } as const;
 
 let _db: MySql2Database | null = null;
@@ -19,10 +20,9 @@ export async function getDb(): Promise<MySql2Database> {
 
   let url = process.env.DATABASE_URL;
   if (!url) {
-    console.error("[Database] ❌ DATABASE_URL não encontrada no .env!");
+    console.error("[Database] DATABASE_URL nao encontrada no .env!");
     throw new Error("DATABASE_URL missing");
   }
-
   url = url.replace(/^['"]|['"]$/g, "");
 
   _pool = mysql.createPool({ ...POOL_CONFIG, uri: url });
@@ -34,15 +34,13 @@ export async function getDb(): Promise<MySql2Database> {
   } catch (error) {
     _pool = null;
     _db = null;
-    console.error("[Database] ❌ Falha ao conectar no TiDB:", error);
+    console.error("[Database] Falha ao conectar no TiDB:", error);
     throw error;
   }
 
   _db = drizzle(_pool as any) as MySql2Database;
-  console.log("[Database] ✅ Conexão com TiDB Cloud estabelecida!");
+  console.log("[Database] Conexao com TiDB Cloud estabelecida!");
 
-  // ✅ Em desenvolvimento, garante que o usuário mock existe
-  // Necessário porque o context.ts usa id=1 hardcoded e a FK exige o registro
   if (process.env.NODE_ENV === "development") {
     try {
       await _db
@@ -57,9 +55,9 @@ export async function getDb(): Promise<MySql2Database> {
           lastSignedIn: new Date(),
         })
         .onDuplicateKeyUpdate({ set: { lastSignedIn: new Date() } });
-      console.log("[Database] ✅ Usuário dev garantido (id=1)");
+      console.log("[Database] Usuario dev garantido (id=1)");
     } catch (error) {
-      console.warn("[Database] ⚠️ Não foi possível criar usuário dev:", error);
+      console.warn("[Database] Nao foi possivel criar usuario dev:", error);
     }
   }
 
@@ -68,14 +66,12 @@ export async function getDb(): Promise<MySql2Database> {
 
 export async function upsertUser(user: InsertUser): Promise<void> {
   const db = await getDb();
-
   if (!user.openId) throw new Error("User openId is required");
 
   const values: InsertUser = {
     openId: user.openId,
     lastSignedIn: new Date(),
   };
-
   const updateSet: Partial<InsertUser> = {
     lastSignedIn: new Date(),
   };
@@ -96,7 +92,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   try {
     await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
   } catch (error) {
-    console.error("[Database] ❌ Falha ao upsert usuário:", error);
+    console.error("[Database] Falha ao upsert usuario:", error);
     throw error;
   }
 }

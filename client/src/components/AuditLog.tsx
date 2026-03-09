@@ -50,8 +50,8 @@ export function AuditLog({ entries = [] }: AuditLogProps) {
   );
 
   return (
-    <ScrollArea className="h-[320px] w-full border-2 border-black">
-      <div className="divide-y-2 divide-gray-100">
+    <ScrollArea className="h-[320px] w-full border border-gray-200 rounded-lg">
+      <div className="divide-y divide-gray-100">
         {sorted.map((entry) => {
           const cfg = ACTION_CONFIG[entry.action] ?? {
             label: entry.action,

@@ -1,8 +1,10 @@
 export type PaymentStatus = 'paid' | 'partial' | 'late' | 'clean';
 
+import Decimal from "decimal.js";
+
 export interface Transaction {
   id: string;
-  type: 'loan' | 'payment' | 'amortization';
+  type: 'loan' | 'payment' | 'amortization' | 'reversal';
   amount: number;
   date: string;
   description?: string;
@@ -25,12 +27,18 @@ export const INTEREST_RATE = 0.10; // 10%
 
 // Calcula o valor de juros do mês atual baseado no saldo devedor
 export const calculateMonthlyInterest = (currentDebt: number): number => {
-  return currentDebt * INTEREST_RATE;
+  return new Decimal(currentDebt)
+    .mul(INTEREST_RATE)
+    .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+    .toNumber();
 };
 
 // Calcula o total a pagar no mês (Cota + Juros)
 export const calculateMonthlyTotal = (currentDebt: number): number => {
-  return FIXED_FEE + calculateMonthlyInterest(currentDebt);
+  return new Decimal(FIXED_FEE)
+    .add(calculateMonthlyInterest(currentDebt))
+    .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+    .toNumber();
 };
 
 // Determina o status do participante para as cores

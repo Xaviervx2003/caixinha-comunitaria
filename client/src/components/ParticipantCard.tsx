@@ -8,6 +8,7 @@ import { formatCurrency } from '@/lib/format-currency';
 import { useState } from 'react';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { showSuccessToast, showErrorToast } from '@/lib/toast-utils';
+import { calculateMonthlyInterest, calculateMonthlyTotal } from "@/lib/finance";
 
 interface ParticipantCardProps {
   participant: any;
@@ -24,7 +25,6 @@ interface ParticipantCardProps {
   onViewChart?: () => void;
 }
 
-// ✅ Meses no formato correto — value é "YYYY-MM" sem o ano (só "MM")
 const MONTHS = [
   { value: '01', label: 'Jan', full: 'Janeiro' },
   { value: '02', label: 'Fev', full: 'Fevereiro' },
@@ -47,7 +47,8 @@ export function ParticipantCard({
 }: ParticipantCardProps) {
   const status = getParticipantStatus(participant);
   const progress = calculateProgress(participant.totalLoan, participant.currentDebt);
-  const monthlyTotal = calculateMonthlyTotal(participant.currentDebt);
+  const currentDebtNumber = parseFloat(participant.currentDebt?.toString?.() ?? `${participant.currentDebt ?? 0}`);
+  const monthlyTotal = calculateMonthlyTotal(Number.isFinite(currentDebtNumber) ? currentDebtNumber : 0);
 
   const monthlyPayments = participant.monthlyPayments || [];
   const [isExpanded, setIsExpanded] = useState(true);
@@ -57,11 +58,9 @@ export function ParticipantCard({
   const minYear = 2020;
   const maxYear = currentYear + 2;
 
-  // Modal: desmarcar pagamento
   const [isUnmarkConfirmOpen, setIsUnmarkConfirmOpen] = useState(false);
   const [monthToUnmark, setMonthToUnmark] = useState<{ id: number; monthValue: string; year: number; label: string } | null>(null);
 
-  // Modal: pagar mês
   const [isPayMonthOpen, setIsPayMonthOpen] = useState(false);
   const [monthToPay, setMonthToPay] = useState<{ monthValue: string; year: number; label: string } | null>(null);
 
@@ -73,6 +72,10 @@ export function ParticipantCard({
       utils.caixinha.getAllTransactions.invalidate();
       utils.caixinha.getMonthlyPayments.invalidate();
       utils.caixinha.getAuditLog.invalidate();
+      
+      // ✅ LINHA ADICIONADA: Atualiza o Balancete na hora ao desmarcar
+      utils.caixinha.getBalancete.invalidate();
+
       showSuccessToast('Pagamento desmarcado!');
     },
     onError: (error) => {
@@ -86,6 +89,10 @@ export function ParticipantCard({
       utils.caixinha.getAllTransactions.invalidate();
       utils.caixinha.getMonthlyPayments.invalidate();
       utils.caixinha.getAuditLog.invalidate();
+      
+      // ✅ LINHA ADICIONADA: Atualiza o Balancete na hora ao pagar
+      utils.caixinha.getBalancete.invalidate();
+
       setIsPayMonthOpen(false);
       if (monthToPay) {
         showSuccessToast(`Pagamento de ${monthToPay.label}/${monthToPay.year} registrado!`);
@@ -96,9 +103,8 @@ export function ParticipantCard({
     },
   });
 
-  // ✅ CORRIGIDO: compara "YYYY-MM" com "YYYY-MM"
   const getPaidRecord = (monthValue: string, year: number) => {
-    const formatted = `${year}-${monthValue}`; // ex: "2026-03"
+    const formatted = `${year}-${monthValue}`;
     return monthlyPayments.find((p: any) =>
       p.month === formatted && p.year === year && (p.paid === true || p.paid === 1)
     );
@@ -107,11 +113,9 @@ export function ParticipantCard({
   const handleMonthClick = (monthValue: string, year: number, label: string) => {
     const paidRecord = getPaidRecord(monthValue, year);
     if (paidRecord) {
-      // Mês pago → oferecer desmarcar
       setMonthToUnmark({ id: paidRecord.id, monthValue, year, label });
       setIsUnmarkConfirmOpen(true);
     } else {
-      // Mês não pago → oferecer pagar
       setMonthToPay({ monthValue, year, label });
       setIsPayMonthOpen(true);
     }
@@ -145,20 +149,19 @@ export function ParticipantCard({
   const StatusIcon = { green: CheckCircle2, yellow: AlertCircle, red: XCircle }[status];
 
   return (
-    <div className="relative bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] p-6 flex flex-col gap-4 transition-all hover:-translate-y-1 hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-      {/* Header */}
+    <div className="relative bg-white border border-gray-200 rounded-xl shadow-sm p-5 sm:p-6 flex flex-col gap-4 transition-all hover:shadow-md">
       <div className="flex justify-between items-start gap-2 cursor-pointer group" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex-1">
-          <h3 className="text-xl font-bold text-black uppercase tracking-tight group-hover:text-gray-700 transition-colors">{participant.name}</h3>
+          <h3 className="text-lg sm:text-xl font-semibold text-gray-900 tracking-tight group-hover:text-gray-700 transition-colors">{participant.name}</h3>
           {!isExpanded && (
-            <span className="text-sm font-bold text-[#FF3D00]">Dívida: {formatCurrency(participant.currentDebt)}</span>
+            <span className="text-sm font-semibold text-rose-600">Dívida: {formatCurrency(participant.currentDebt)}</span>
           )}
           {isExpanded && (
             <span className="text-xs font-mono text-gray-500">ID: {participant.id}</span>
           )}
         </div>
         {isExpanded && (
-          <Badge className={cn("rounded-none border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] font-bold px-3 py-1 whitespace-nowrap", statusColors[status])}>
+          <Badge className={cn("rounded-full border font-semibold px-3 py-1 whitespace-nowrap", statusColors[status])}>
             <StatusIcon className="w-4 h-4 mr-2" />
             {statusText[status]}
           </Badge>
@@ -166,7 +169,7 @@ export function ParticipantCard({
         {isExpanded && (
           <button
             onClick={(e) => { e.stopPropagation(); onDelete?.(); }}
-            className="text-red-600 hover:text-red-800 font-bold text-lg hover:bg-red-50 rounded p-1 transition-colors flex-shrink-0"
+            className="text-rose-600 hover:text-rose-700 text-lg hover:bg-rose-50 rounded-md p-1 transition-colors flex-shrink-0"
             title="Deletar participante"
           >
             ✕
@@ -176,36 +179,33 @@ export function ParticipantCard({
 
       {isExpanded && (
         <>
-          {/* Debt Info */}
           <div className="space-y-2">
             <div className="flex justify-between items-baseline">
-              <span className="text-xs font-bold uppercase text-gray-600">Emprestado</span>
-              <span className="text-lg font-black text-black">{formatCurrency(participant.totalLoan)}</span>
+              <span className="text-xs font-semibold uppercase text-gray-500">Emprestado</span>
+              <span className="text-lg font-semibold text-gray-900">{formatCurrency(participant.totalLoan)}</span>
             </div>
             <div className="flex justify-between items-baseline">
-              <span className="text-xs font-bold uppercase text-gray-600">Saldo Devedor</span>
-              <span className="text-lg font-black text-[#FF3D00]">{formatCurrency(participant.currentDebt)}</span>
+              <span className="text-xs font-semibold uppercase text-gray-500">Saldo devedor</span>
+              <span className="text-lg font-semibold text-rose-600">{formatCurrency(participant.currentDebt)}</span>
             </div>
             <div className="flex justify-between items-baseline">
-              <span className="text-xs font-bold uppercase text-gray-600">Mensalidade</span>
-              <span className="text-sm font-bold text-black">{formatCurrency(monthlyTotal)}</span>
+              <span className="text-xs font-semibold uppercase text-gray-500">Mensalidade</span>
+              <span className="text-sm font-semibold text-gray-900">{formatCurrency(monthlyTotal)}</span>
             </div>
           </div>
 
-          {/* Progress Bar */}
           {parseFloat(participant.totalLoan) > 0 && (
             <div className="space-y-1">
               <div className="flex justify-between items-center">
-                <span className="text-xs font-bold uppercase text-gray-600">Progresso</span>
-                <span className="text-xs font-bold text-gray-600">{progress}%</span>
+                <span className="text-xs font-semibold uppercase text-gray-500">Progresso</span>
+                <span className="text-xs font-semibold text-gray-600">{progress}%</span>
               </div>
-              <div className="w-full h-3 bg-gray-200 border-2 border-black">
-                <div className="h-full bg-[#00C853] transition-all" style={{ width: `${progress}%` }} />
+              <div className="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} />
               </div>
             </div>
           )}
 
-          {/* Monthly Payments Grid */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase text-gray-600">Meses Pagos</span>
@@ -228,7 +228,7 @@ export function ParticipantCard({
               </div>
             </div>
 
-            <div className="grid grid-cols-6 gap-1">
+            <div className="grid grid-cols-6 gap-1.5">
               {MONTHS.map((month) => {
                 const isPaid = !!getPaidRecord(month.value, selectedYear);
                 return (
@@ -239,10 +239,10 @@ export function ParticipantCard({
                       handleMonthClick(month.value, selectedYear, month.full);
                     }}
                     className={cn(
-                      "h-8 flex items-center justify-center text-xs font-bold border-2 border-black transition-all",
+                      "h-8 flex items-center justify-center text-xs font-semibold border rounded-md transition-all",
                       isPaid
-                        ? "bg-[#00C853] text-white hover:bg-[#00a844] cursor-pointer"
-                        : "bg-gray-100 text-gray-500 hover:bg-[#e8f5e9] hover:text-[#00C853] cursor-pointer"
+                        ? "bg-emerald-500 border-emerald-600 text-white hover:bg-emerald-600 cursor-pointer"
+                        : "bg-gray-50 border-gray-200 text-gray-600 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer"
                     )}
                     title={isPaid
                       ? `${month.full}/${selectedYear} — Pago ✓ (clique para desmarcar)`
@@ -259,7 +259,6 @@ export function ParticipantCard({
             </p>
           </div>
 
-          {/* Unmark Confirmation */}
           <ConfirmationModal
             isOpen={isUnmarkConfirmOpen}
             title="Desmarcar Pagamento"
@@ -274,7 +273,6 @@ export function ParticipantCard({
             onCancel={() => { setIsUnmarkConfirmOpen(false); setMonthToUnmark(null); }}
           />
 
-          {/* Pay Month Modal */}
           <Dialog open={isPayMonthOpen} onOpenChange={setIsPayMonthOpen}>
             <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[380px]">
               <DialogHeader>
@@ -301,7 +299,7 @@ export function ParticipantCard({
                       <span className="text-xs font-bold uppercase text-gray-600">Total a pagar</span>
                       <span className="text-lg font-black text-[#00C853]">{formatCurrency(monthlyTotal)}</span>
                     </div>
-                    <p className="text-xs text-gray-500">R$ 200,00 cota + {formatCurrency(calculateMonthlyInterest(participant.currentDebt))} juros (10%)</p>
+                    <p className="text-xs text-gray-500">R$ 200,00 cota + {formatCurrency(calculateMonthlyInterest(Number.isFinite(currentDebtNumber) ? currentDebtNumber : 0))} juros (10%)</p>
                   </div>
                 </div>
               )}
@@ -325,7 +323,6 @@ export function ParticipantCard({
             </DialogContent>
           </Dialog>
 
-          {/* Action Buttons */}
           <div className="grid grid-cols-2 gap-3 mt-auto pt-4">
             <Button
               onClick={(e) => { e.stopPropagation(); onPayment?.(); }}
@@ -364,7 +361,6 @@ export function ParticipantCard({
             </Button>
           </div>
 
-          {/* Edit Actions */}
           <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t-2 border-gray-200">
             <Button
               onClick={(e) => { e.stopPropagation(); onEditName?.(); }}
@@ -409,12 +405,4 @@ function calculateProgress(totalLoan: any, currentDebt: any): number {
   const current = parseFloat(currentDebt);
   if (total === 0) return 0;
   return Math.round(((total - current) / total) * 100);
-}
-
-function calculateMonthlyInterest(currentDebt: any): number {
-  return parseFloat(currentDebt) * 0.10;
-}
-
-function calculateMonthlyTotal(currentDebt: any): number {
-  return 200 + calculateMonthlyInterest(currentDebt);
 }

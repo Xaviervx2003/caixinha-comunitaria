@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Plus, PiggyBank, AlertTriangle, RotateCcw, Download, Upload } from 'lucide-react';
+import { Plus, PiggyBank, AlertTriangle, RotateCcw, Download, Upload, TrendingUp, Calendar } from 'lucide-react';
 import { getLoginUrl } from '@/const';
 import { OfflineIndicator } from '@/components/OfflineIndicator';
 import { useLocalCache } from '@/hooks/use-local-cache';
@@ -20,8 +20,8 @@ import { DebtorsList } from '@/components/DebtorsList';
 import { formatCurrency } from '@/lib/format-currency';
 import { showSuccessToast, showErrorToast } from '@/lib/toast-utils';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
+import { calculateMonthlyInterest } from "@/lib/finance";
 
-// ── Tipos ─────────────────────────────────────────────────────────────────────
 type Participant = {
   id: number;
   name: string;
@@ -50,7 +50,15 @@ type AuditEntry = {
   description?: string;
   createdAt?: string | Date | null;
 };
-// ─────────────────────────────────────────────────────────────────────────────
+
+type Balancete = {
+  caixaLivre: string;
+  contasAReceber: string;
+  patrimonioTotal: string;
+  totalRendimentos: string;
+  inadimplencia: number;
+  mesAtual: string;
+};
 
 const MONTHS = [
   { value: '01', label: 'Janeiro' },
@@ -85,16 +93,22 @@ export default function Home() {
     enabled: isAuthenticated,
   }) as { data: AuditEntry[] };
 
-  // ── getOrCreateCaixinha — garante que caixinha existe ao logar ─────────────
+  const { data: nextMonthEstimate } = trpc.caixinha.getNextMonthEstimate.useQuery(undefined, {
+    enabled: isAuthenticated,
+  });
+
+  const { data: balancete } = trpc.caixinha.getBalancete.useQuery(undefined, {
+    enabled: isAuthenticated,
+  }) as { data: Balancete | undefined };
+
+  // ── getOrCreateCaixinha ────────────────────────────────────────────────────
   const getOrCreateCaixinhaMutation = trpc.caixinha.getOrCreateCaixinha.useMutation({
     onSuccess: (data) => console.log('✅ Caixinha pronta:', data),
     onError: (error) => console.error('❌ Erro na caixinha:', error.message),
   });
 
   useEffect(() => {
-    if (isAuthenticated) {
-      getOrCreateCaixinhaMutation.mutate();
-    }
+    if (isAuthenticated) getOrCreateCaixinhaMutation.mutate();
   }, [isAuthenticated]);
 
   // ── Cache local ────────────────────────────────────────────────────────────
@@ -111,6 +125,8 @@ export default function Home() {
     onSuccess: () => {
       utils.caixinha.listParticipants.invalidate();
       utils.caixinha.getAllTransactions.invalidate();
+      utils.caixinha.getNextMonthEstimate.invalidate();
+      utils.caixinha.getBalancete.invalidate();
     },
   });
 
@@ -118,16 +134,20 @@ export default function Home() {
     onSuccess: () => {
       utils.caixinha.listParticipants.invalidate();
       utils.caixinha.getAllTransactions.invalidate();
+      utils.caixinha.getNextMonthEstimate.invalidate();
+      utils.caixinha.getAuditLog.invalidate();
+      utils.caixinha.getBalancete.invalidate();
     },
   });
 
-  // ── Pagamento via modal do Home (botão "Pagar Mensal") ─────────────────────
   const paymentMutation = trpc.caixinha.registerPayment.useMutation({
     onSuccess: () => {
       utils.caixinha.listParticipants.invalidate();
       utils.caixinha.getAllTransactions.invalidate();
       utils.caixinha.getMonthlyPayments.invalidate();
       utils.caixinha.getAuditLog.invalidate();
+      utils.caixinha.getNextMonthEstimate.invalidate();
+      utils.caixinha.getBalancete.invalidate();
     },
     onError: (error) => showErrorToast(error.message || 'Erro ao registrar pagamento'),
   });
@@ -136,6 +156,9 @@ export default function Home() {
     onSuccess: () => {
       utils.caixinha.listParticipants.invalidate();
       utils.caixinha.getAllTransactions.invalidate();
+      utils.caixinha.getNextMonthEstimate.invalidate();
+      utils.caixinha.getAuditLog.invalidate();
+      utils.caixinha.getBalancete.invalidate();
     },
   });
 
@@ -144,15 +167,27 @@ export default function Home() {
       utils.caixinha.listParticipants.invalidate();
       utils.caixinha.getMonthlyPayments.invalidate();
       utils.caixinha.getAllTransactions.invalidate();
+      utils.caixinha.getNextMonthEstimate.invalidate();
+      utils.caixinha.getAuditLog.invalidate();
+      utils.caixinha.getBalancete.invalidate();
     },
   });
 
   const updateLoanMutation = trpc.caixinha.updateParticipantLoan.useMutation({
-    onSuccess: () => utils.caixinha.listParticipants.invalidate(),
+    onSuccess: () => {
+      utils.caixinha.listParticipants.invalidate();
+      utils.caixinha.getNextMonthEstimate.invalidate();
+      utils.caixinha.getBalancete.invalidate();
+    },
   });
 
   const updateDebtMutation = trpc.caixinha.updateParticipantDebt.useMutation({
-    onSuccess: () => utils.caixinha.listParticipants.invalidate(),
+    onSuccess: () => {
+      utils.caixinha.listParticipants.invalidate();
+      utils.caixinha.getNextMonthEstimate.invalidate();
+      utils.caixinha.getAuditLog.invalidate();
+      utils.caixinha.getBalancete.invalidate();
+    },
   });
 
   const updateNameMutation = trpc.caixinha.updateParticipantName.useMutation({
@@ -167,6 +202,9 @@ export default function Home() {
     onSuccess: () => {
       utils.caixinha.listParticipants.invalidate();
       utils.caixinha.getAllTransactions.invalidate();
+      utils.caixinha.getNextMonthEstimate.invalidate();
+      utils.caixinha.getAuditLog.invalidate();
+      utils.caixinha.getBalancete.invalidate();
     },
   });
 
@@ -184,6 +222,7 @@ export default function Home() {
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isChartOpen, setIsChartOpen] = useState(false);
+  const [isEstimateExpanded, setIsEstimateExpanded] = useState(false);
   const [chartParticipantId, setChartParticipantId] = useState<number | null>(null);
 
   // ── Form states ────────────────────────────────────────────────────────────
@@ -206,35 +245,17 @@ export default function Home() {
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
 
-  // ── Dashboard calculations ─────────────────────────────────────────────────
-  const totalPaymentAmount = allTransactions
-    .filter((t) => t.type === 'payment')
-    .reduce((acc, t) => acc + parseFloat(t.amount.toString()), 0);
-
-  const totalAmortizationAmount = allTransactions
-    .filter((t) => t.type === 'amortization')
-    .reduce((acc, t) => acc + parseFloat(t.amount.toString()), 0);
-
-  const MONTHLY_FEE = 200;
-  const paymentCount = allTransactions.filter((t) => t.type === 'payment').length;
-  const totalFees = paymentCount * MONTHLY_FEE + totalAmortizationAmount;
-  const totalInterest = totalPaymentAmount - paymentCount * MONTHLY_FEE;
-  const totalDebts = participants.reduce(
-    (acc, p) => acc + parseFloat(p.currentDebt.toString()), 0
-  );
+  const caixaLivre = balancete ? parseFloat(balancete.caixaLivre) : 0;
+  const contasAReceber = balancete ? parseFloat(balancete.contasAReceber) : 0;
+  const patrimonioTotal = balancete ? parseFloat(balancete.patrimonioTotal) : 0;
+  const totalRendimentos = balancete ? parseFloat(balancete.totalRendimentos) : 0;
+  const inadimplencia = balancete?.inadimplencia ?? 0;
 
   // ── Handlers ───────────────────────────────────────────────────────────────
   const handleAddParticipant = async () => {
-    if (!newParticipantName.trim()) {
-      showErrorToast('Nome do participante é obrigatório');
-      return;
-    }
-    try {
-      await getOrCreateCaixinhaMutation.mutateAsync();
-    } catch {
-      showErrorToast('Erro ao inicializar caixinha');
-      return;
-    }
+    if (!newParticipantName.trim()) { showErrorToast('Nome do participante é obrigatório'); return; }
+    try { await getOrCreateCaixinhaMutation.mutateAsync(); }
+    catch { showErrorToast('Erro ao inicializar caixinha'); return; }
     try {
       await addParticipantMutation.mutateAsync({
         name: newParticipantName.trim(),
@@ -242,13 +263,9 @@ export default function Home() {
         totalLoan: newParticipantLoan ? parseFloat(newParticipantLoan) : 0,
       });
       setIsAddParticipantOpen(false);
-      setNewParticipantName('');
-      setNewParticipantEmail('');
-      setNewParticipantLoan('');
+      setNewParticipantName(''); setNewParticipantEmail(''); setNewParticipantLoan('');
       showSuccessToast(`${newParticipantName} adicionado com sucesso!`);
-    } catch {
-      showErrorToast('Erro ao adicionar participante');
-    }
+    } catch { showErrorToast('Erro ao adicionar participante'); }
   };
 
   const handleAddLoan = async () => {
@@ -257,8 +274,7 @@ export default function Home() {
     if (isNaN(amount) || amount <= 0) { showErrorToast('Valor inválido'); return; }
     try {
       await addLoanMutation.mutateAsync({ participantId: selectedParticipantId, amount });
-      setIsAddLoanOpen(false);
-      setLoanAmount('');
+      setIsAddLoanOpen(false); setLoanAmount('');
       showSuccessToast(`Empréstimo de ${formatCurrency(amount)} registrado!`);
     } catch { showErrorToast('Erro ao adicionar empréstimo'); }
   };
@@ -286,8 +302,7 @@ export default function Home() {
     if (amount > currentDebt) { showErrorToast('Valor maior que a dívida atual.'); return; }
     try {
       await amortizeMutation.mutateAsync({ participantId: selectedParticipantId, amount });
-      setIsAmortizeOpen(false);
-      setAmortizeAmount('');
+      setIsAmortizeOpen(false); setAmortizeAmount('');
       showSuccessToast(`Amortização de ${formatCurrency(amount)} registrada!`);
     } catch { showErrorToast('Erro ao registrar amortização'); }
   };
@@ -308,8 +323,7 @@ export default function Home() {
     if (isNaN(amount) || amount < 0) { showErrorToast('Valor inválido'); return; }
     try {
       await updateLoanMutation.mutateAsync({ participantId: selectedParticipantId, newTotalLoan: amount });
-      setIsEditLoanOpen(false);
-      setEditLoanAmount('');
+      setIsEditLoanOpen(false); setEditLoanAmount('');
       showSuccessToast('Empréstimo atualizado!');
     } catch { showErrorToast('Erro ao atualizar empréstimo'); }
   };
@@ -320,8 +334,7 @@ export default function Home() {
     if (isNaN(amount) || amount < 0) { showErrorToast('Valor inválido'); return; }
     try {
       await updateDebtMutation.mutateAsync({ participantId: selectedParticipantId, newCurrentDebt: amount });
-      setIsEditDebtOpen(false);
-      setEditDebtAmount('');
+      setIsEditDebtOpen(false); setEditDebtAmount('');
       showSuccessToast('Saldo devedor atualizado!');
     } catch { showErrorToast('Erro ao atualizar saldo'); }
   };
@@ -330,8 +343,7 @@ export default function Home() {
     if (!selectedParticipantId || !editNameValue) return;
     try {
       await updateNameMutation.mutateAsync({ participantId: selectedParticipantId, newName: editNameValue });
-      setIsEditNameOpen(false);
-      setEditNameValue('');
+      setIsEditNameOpen(false); setEditNameValue('');
       showSuccessToast('Nome atualizado!');
     } catch { showErrorToast('Erro ao atualizar nome'); }
   };
@@ -340,8 +352,7 @@ export default function Home() {
     if (!selectedParticipantId) return;
     try {
       await updateEmailMutation.mutateAsync({ participantId: selectedParticipantId, email: editEmailValue || undefined });
-      setIsEditEmailOpen(false);
-      setEditEmailValue('');
+      setIsEditEmailOpen(false); setEditEmailValue('');
       showSuccessToast('Email atualizado!');
     } catch { showErrorToast('Erro ao atualizar email'); }
   };
@@ -350,8 +361,7 @@ export default function Home() {
     if (!selectedParticipantId) return;
     try {
       await deleteParticipantMutation.mutateAsync({ participantId: selectedParticipantId });
-      setIsDeleteConfirmOpen(false);
-      setSelectedParticipantId(null);
+      setIsDeleteConfirmOpen(false); setSelectedParticipantId(null);
       showSuccessToast('Participante deletado!');
     } catch { showErrorToast('Erro ao deletar participante'); }
   };
@@ -387,24 +397,24 @@ export default function Home() {
 
   // ── Main UI ────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#F5F5F0] font-sans pb-20">
+    <div className="min-h-screen bg-gray-50 font-sans pb-20">
       <OfflineIndicator />
 
       {/* Header */}
-      <header className="bg-white border-b-4 border-black sticky top-0 z-10">
-        <div className="container mx-auto py-3 sm:py-4 md:py-6 px-3 sm:px-4 flex justify-between items-center">
+      <header className="bg-white/80 backdrop-blur border-b border-gray-200 sticky top-0 z-10">
+        <div className="container mx-auto py-4 px-3 sm:px-4 flex justify-between items-center">
           <div className="flex items-center gap-2 sm:gap-3">
-            <div className="bg-black text-white p-1.5 sm:p-2 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)]">
+            <div className="bg-gray-900 text-white p-2 rounded-lg shadow-sm">
               <PiggyBank className="w-6 sm:w-8 h-6 sm:h-8" />
             </div>
-            <h1 className="text-lg sm:text-2xl font-black uppercase tracking-tighter leading-tight">
-              Caixinha<br/>Comunitária
+            <h1 className="text-lg sm:text-2xl font-semibold tracking-tight leading-tight text-gray-900">
+              Caixinha Comunitária
             </h1>
           </div>
           <div className="hidden sm:block text-right">
-            <p className="text-xs font-bold text-gray-600">{user?.name}</p>
-            <span className="text-xs font-bold uppercase bg-yellow-300 px-2 py-1 border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-              Beta v2.0
+            <p className="text-xs font-medium text-gray-600">{user?.name}</p>
+            <span className="mt-1 inline-flex text-xs font-medium text-gray-600 bg-gray-100 px-2 py-1 rounded-full border border-gray-200">
+              v2.0
             </span>
           </div>
         </div>
@@ -412,52 +422,129 @@ export default function Home() {
 
       <main className="container mx-auto px-3 sm:px-4 py-6 sm:py-8">
 
-        {/* Dashboard Stats */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 md:gap-6 mb-8 sm:mb-12">
-          <div className="bg-[#00C853] border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-4 sm:p-6 text-white relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-2 sm:p-4 opacity-20 group-hover:scale-110 transition-transform">
-              <PiggyBank className="w-24 sm:w-32 h-24 sm:h-32" />
+        {/* Dashboard (Balancete) */}
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-6 mb-4">
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 sm:p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Caixa livre</h2>
+              <PiggyBank className="w-4 h-4 text-emerald-600" />
             </div>
-            <h2 className="text-xs sm:text-sm font-black uppercase tracking-widest mb-2">Cotas Arrecadadas</h2>
-            <p className="text-2xl sm:text-4xl font-black tracking-tighter">{formatCurrency(totalFees)}</p>
-            <p className="mt-2 sm:mt-4 text-xs font-bold opacity-90 border-t-2 border-white/30 pt-2">
-              Pagamentos + Amortizações
-            </p>
+            <p className="mt-2 text-2xl font-semibold text-gray-900">{formatCurrency(caixaLivre)}</p>
+            <p className="mt-1 text-xs text-gray-500">Entradas - saídas (inclui estornos)</p>
           </div>
 
-          <div className="bg-[#FFD600] border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-4 sm:p-6 text-black relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-2 sm:p-4 opacity-10 group-hover:scale-110 transition-transform">
-              <AlertTriangle className="w-24 sm:w-32 h-24 sm:h-32" />
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 sm:p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Contas a receber</h2>
+              <AlertTriangle className="w-4 h-4 text-orange-600" />
             </div>
-            <h2 className="text-xs sm:text-sm font-black uppercase tracking-widest mb-2">Juros Arrecadados</h2>
-            <p className="text-2xl sm:text-4xl font-black tracking-tighter">{formatCurrency(totalInterest)}</p>
-            <p className="mt-2 sm:mt-4 text-xs font-bold opacity-80 border-t-2 border-black/20 pt-2">
-              10% sobre Dívidas
-            </p>
+            <p className="mt-2 text-2xl font-semibold text-gray-900">{formatCurrency(contasAReceber)}</p>
+            <p className="mt-1 text-xs text-gray-500">Soma do saldo devedor atual</p>
           </div>
 
-          <div className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-4 sm:p-6 relative overflow-hidden">
-            <h2 className="text-xs sm:text-sm font-black uppercase tracking-widest mb-2 text-gray-500">Total em Dívidas</h2>
-            <p className="text-2xl sm:text-4xl font-black tracking-tighter text-[#FF3D00]">{formatCurrency(totalDebts)}</p>
-            <p className="mt-2 sm:mt-4 text-xs font-bold text-gray-500 border-t-2 border-gray-200 pt-2">
-              Capital a Recuperar
-            </p>
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 sm:p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Patrimônio total</h2>
+              <TrendingUp className="w-4 h-4 text-indigo-600" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-gray-900">{formatCurrency(patrimonioTotal)}</p>
+            <p className="mt-1 text-xs text-gray-500">Caixa + contas a receber</p>
           </div>
 
-          <div className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-4 sm:p-6 relative overflow-hidden">
-            <h2 className="text-xs sm:text-sm font-black uppercase tracking-widest mb-2 text-purple-600">Total Arrecadado</h2>
-            <p className="text-2xl sm:text-4xl font-black tracking-tighter text-purple-600">{formatCurrency(totalFees + totalInterest)}</p>
-            <p className="mt-2 sm:mt-4 text-xs font-bold text-purple-600 border-t-2 border-purple-200 pt-2">
-              Cotas + Juros
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 sm:p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Rendimentos</h2>
+              <Calendar className="w-4 h-4 text-gray-600" />
+            </div>
+            <p className="mt-2 text-2xl font-semibold text-gray-900">{formatCurrency(totalRendimentos)}</p>
+            <p className="mt-1 text-xs text-gray-500">
+              Mês atual: <span className="font-medium text-gray-700">{balancete?.mesAtual ?? "—"}</span> · Inadimplentes:{" "}
+              <span className="font-medium text-gray-700">{inadimplencia}</span>
             </p>
           </div>
         </section>
+
+        {/* ── Estimativa Próximo Mês ─────────────────────────────────────── */}
+        {nextMonthEstimate && (
+          <section className="mb-8 sm:mb-12">
+            <div className="bg-black border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-white">
+
+              {/* Header clicável */}
+              <button
+                onClick={() => setIsEstimateExpanded(!isEstimateExpanded)}
+                className="w-full p-4 sm:p-6 flex items-center justify-between hover:bg-gray-900 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <TrendingUp className="w-5 h-5 text-[#00C853]" />
+                  <div className="text-left">
+                    <p className="text-xs font-black uppercase tracking-widest text-gray-400">
+                      Estimativa — Próximo Mês ({nextMonthEstimate.nextMonth})
+                    </p>
+                    <p className="text-2xl sm:text-4xl font-black tracking-tighter text-[#00C853]">
+                      {formatCurrency(parseFloat(nextMonthEstimate.estimatedTotal))}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-right hidden sm:block">
+                  <div className="flex items-center gap-2 text-xs font-bold text-gray-400 justify-end mb-1">
+                    <Calendar className="w-3 h-3" />
+                    <span>Vence dia <span className="text-white">{nextMonthEstimate.dueDay}</span> de {nextMonthEstimate.nextMonth.split('-')[1] === '01' ? 'Jan' : MONTHS.find(m => m.value === nextMonthEstimate.nextMonth.split('-')[1])?.label?.slice(0,3)}</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Cotas: <span className="text-white">{formatCurrency(parseFloat(nextMonthEstimate.estimatedQuotas))}</span>
+                    {' + '}
+                    Juros: <span className="text-[#FFD600]">{formatCurrency(parseFloat(nextMonthEstimate.estimatedInterest))}</span>
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {nextMonthEstimate.participantCount} participante{nextMonthEstimate.participantCount !== 1 ? 's' : ''}
+                    {' · '}
+                    <span className="text-[#00C853]">{isEstimateExpanded ? 'Ocultar detalhes ▲' : 'Ver detalhes ▼'}</span>
+                  </p>
+                </div>
+              </button>
+
+              {/* Breakdown expansível */}
+              {isEstimateExpanded && (
+                <div className="border-t-2 border-gray-700 p-4 sm:p-6">
+                  <p className="text-xs font-black uppercase text-gray-400 mb-3">Breakdown por participante</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {nextMonthEstimate.perParticipant.map((p: any) => (
+                      <div key={p.id} className="flex justify-between items-center bg-gray-900 border border-gray-700 px-3 py-2">
+                        <span className="text-xs font-bold uppercase truncate text-gray-300 flex-1">{p.name}</span>
+                        <div className="text-right flex-shrink-0 ml-3">
+                          <span className="block text-sm font-black text-white">{formatCurrency(parseFloat(p.total))}</span>
+                          <span className="block text-xs text-gray-500">
+                            R$200 + {formatCurrency(parseFloat(p.interest))}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Resumo */}
+                  <div className="mt-4 pt-4 border-t border-gray-700 flex flex-wrap gap-4 text-xs font-bold">
+                    <span className="text-gray-400">
+                      Total cotas: <span className="text-white">{formatCurrency(parseFloat(nextMonthEstimate.estimatedQuotas))}</span>
+                    </span>
+                    <span className="text-gray-400">
+                      Total juros: <span className="text-[#FFD600]">{formatCurrency(parseFloat(nextMonthEstimate.estimatedInterest))}</span>
+                    </span>
+                    <span className="text-gray-400">
+                      Estimativa total: <span className="text-[#00C853] text-sm">{formatCurrency(parseFloat(nextMonthEstimate.estimatedTotal))}</span>
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* Control Buttons */}
         <section className="mb-8 sm:mb-12 flex gap-2 sm:gap-4 flex-wrap">
           <Button
             onClick={() => setIsResetConfirmOpen(true)}
-            className="bg-[#FF3D00] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
+            className="bg-rose-600 hover:bg-rose-700 text-white rounded-lg shadow-sm font-semibold text-xs sm:text-sm h-10 sm:h-auto px-3 sm:px-4 py-2"
           >
             <RotateCcw className="w-4 h-4 mr-1 sm:mr-2" />
             <span className="hidden sm:inline">Resetar Mês</span><span className="sm:hidden">Resetar</span>
@@ -481,14 +568,14 @@ export default function Home() {
                 showSuccessToast('Backup exportado!');
               } catch { showErrorToast('Erro ao exportar backup'); }
             }}
-            className="bg-[#2196F3] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
+            className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm font-semibold text-xs sm:text-sm h-10 sm:h-auto px-3 sm:px-4 py-2"
           >
             <Download className="w-4 h-4 mr-1 sm:mr-2" />
             <span className="hidden sm:inline">Exportar CSV</span><span className="sm:hidden">Export</span>
           </Button>
           <Button
             onClick={() => setIsImportOpen(true)}
-            className="bg-[#4CAF50] text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm font-semibold text-xs sm:text-sm h-10 sm:h-auto px-3 sm:px-4 py-2"
           >
             <Upload className="w-4 h-4 mr-1 sm:mr-2" />
             <span className="hidden sm:inline">Importar CSV</span><span className="sm:hidden">Import</span>
@@ -498,10 +585,10 @@ export default function Home() {
         {/* Participants */}
         <section>
           <div className="flex justify-between items-end mb-6 sm:mb-8 border-b-4 border-black pb-3 sm:pb-4 gap-2">
-            <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-tight">Participantes</h2>
+            <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight text-gray-900">Participantes</h2>
             <Button
               onClick={() => setIsAddParticipantOpen(true)}
-              className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none font-bold uppercase text-xs sm:text-sm h-10 sm:h-auto px-2 sm:px-4 py-2"
+              className="bg-gray-900 hover:bg-gray-800 text-white rounded-lg shadow-sm font-semibold text-xs sm:text-sm h-10 sm:h-auto px-3 sm:px-4 py-2"
             >
               <Plus className="w-4 h-4 mr-1 sm:mr-2" />
               <span className="hidden sm:inline">Novo Membro</span><span className="sm:hidden">Novo</span>
@@ -509,16 +596,12 @@ export default function Home() {
           </div>
 
           {isLoading ? (
-            <div className="text-center py-12">
-              <p className="text-gray-600">Carregando participantes...</p>
-            </div>
+            <div className="text-center py-12"><p className="text-gray-600">Carregando participantes...</p></div>
           ) : participants.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-gray-600 mb-4">Nenhum participante adicionado ainda</p>
-              <Button
-                onClick={() => setIsAddParticipantOpen(true)}
-                className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 transition-all rounded-none font-bold uppercase"
-              >
+              <Button onClick={() => setIsAddParticipantOpen(true)}
+                className="bg-black text-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-0.5 transition-all rounded-none font-bold uppercase">
                 <Plus className="w-4 h-4 mr-2" /> Adicionar Primeiro Membro
               </Button>
             </div>
@@ -528,67 +611,29 @@ export default function Home() {
                 <ParticipantCard
                   key={participant.id}
                   participant={participant}
-                  onPayment={() => {
-                    setSelectedParticipantId(participant.id);
-                    setIsPaymentOpen(true);
-                  }}
-                  onAmortize={() => {
-                    setSelectedParticipantId(participant.id);
-                    setAmortizeAmount('');
-                    setIsAmortizeOpen(true);
-                  }}
-                  onAddLoan={() => {
-                    setSelectedParticipantId(participant.id);
-                    setLoanAmount('');
-                    setIsAddLoanOpen(true);
-                  }}
-                  onViewHistory={() => {
-                    setSelectedParticipantId(participant.id);
-                    setIsHistoryOpen(true);
-                  }}
-                  onEditLoan={() => {
-                    setSelectedParticipantId(participant.id);
-                    setEditLoanAmount(parseFloat(participant.totalLoan.toString()).toString());
-                    setIsEditLoanOpen(true);
-                  }}
-                  onEditDebt={() => {
-                    setSelectedParticipantId(participant.id);
-                    setEditDebtAmount(parseFloat(participant.currentDebt.toString()).toString());
-                    setIsEditDebtOpen(true);
-                  }}
-                  onEditName={() => {
-                    setSelectedParticipantId(participant.id);
-                    setEditNameValue(participant.name);
-                    setIsEditNameOpen(true);
-                  }}
-                  onEditEmail={() => {
-                    setSelectedParticipantId(participant.id);
-                    setEditEmailValue(participant.email || '');
-                    setIsEditEmailOpen(true);
-                  }}
-                  onDelete={() => {
-                    setSelectedParticipantId(participant.id);
-                    setIsDeleteConfirmOpen(true);
-                  }}
-                  onViewChart={() => {
-                    setChartParticipantId(participant.id);
-                    setIsChartOpen(true);
-                  }}
+                  onPayment={() => { setSelectedParticipantId(participant.id); setIsPaymentOpen(true); }}
+                  onAmortize={() => { setSelectedParticipantId(participant.id); setAmortizeAmount(''); setIsAmortizeOpen(true); }}
+                  onAddLoan={() => { setSelectedParticipantId(participant.id); setLoanAmount(''); setIsAddLoanOpen(true); }}
+                  onViewHistory={() => { setSelectedParticipantId(participant.id); setIsHistoryOpen(true); }}
+                  onEditLoan={() => { setSelectedParticipantId(participant.id); setEditLoanAmount(parseFloat(participant.totalLoan.toString()).toString()); setIsEditLoanOpen(true); }}
+                  onEditDebt={() => { setSelectedParticipantId(participant.id); setEditDebtAmount(parseFloat(participant.currentDebt.toString()).toString()); setIsEditDebtOpen(true); }}
+                  onEditName={() => { setSelectedParticipantId(participant.id); setEditNameValue(participant.name); setIsEditNameOpen(true); }}
+                  onEditEmail={() => { setSelectedParticipantId(participant.id); setEditEmailValue(participant.email || ''); setIsEditEmailOpen(true); }}
+                  onDelete={() => { setSelectedParticipantId(participant.id); setIsDeleteConfirmOpen(true); }}
+                  onViewChart={() => { setChartParticipantId(participant.id); setIsChartOpen(true); }}
                 />
               ))}
             </div>
           )}
         </section>
 
-        {/* Debtors */}
         {participants.length > 0 && (
           <section className="mb-12 mt-8">
             <DebtorsList debtors={participants.map((p) => ({
-              id: p.id,
-              name: p.name,
+              id: p.id, name: p.name,
               totalLoan: parseFloat(p.totalLoan.toString()),
               currentDebt: parseFloat(p.currentDebt.toString()),
-              monthlyInterest: parseFloat(p.currentDebt.toString()) * 0.1,
+              monthlyInterest: calculateMonthlyInterest(parseFloat(p.currentDebt.toString())),
             }))} />
           </section>
         )}
@@ -596,14 +641,11 @@ export default function Home() {
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
 
-      {/* Add Participant */}
       <Dialog open={isAddParticipantOpen} onOpenChange={setIsAddParticipantOpen}>
-        <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[425px]">
+        <DialogContent className="bg-white border border-gray-200 shadow-lg rounded-xl w-full sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="text-2xl font-black uppercase">Novo Participante</DialogTitle>
-            <DialogDescription className="font-medium text-gray-600">
-              Adicione um novo membro à Caixinha Comunitária.
-            </DialogDescription>
+            <DialogDescription className="font-medium text-gray-600">Adicione um novo membro à Caixinha Comunitária.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
@@ -631,14 +673,11 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* Add Loan */}
       <Dialog open={isAddLoanOpen} onOpenChange={setIsAddLoanOpen}>
-        <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[425px]">
+        <DialogContent className="bg-white border border-gray-200 shadow-lg rounded-xl w-full sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="text-2xl font-black uppercase">Empréstimo Adicional</DialogTitle>
-            <DialogDescription className="font-medium text-gray-600">
-              Novo empréstimo para {selectedParticipant?.name}.
-            </DialogDescription>
+            <DialogDescription className="font-medium text-gray-600">Novo empréstimo para {selectedParticipant?.name}.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
@@ -656,14 +695,11 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* Payment Modal (botão "Pagar Mensal") */}
       <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
-        <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[425px]">
+        <DialogContent className="bg-white border border-gray-200 shadow-lg rounded-xl w-full sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="text-2xl font-black uppercase">Registrar Pagamento</DialogTitle>
-            <DialogDescription className="font-medium text-gray-600">
-              Pagamento mensal de {selectedParticipant?.name}.
-            </DialogDescription>
+            <DialogDescription className="font-medium text-gray-600">Pagamento mensal de {selectedParticipant?.name}.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
@@ -690,14 +726,11 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* Amortization */}
       <Dialog open={isAmortizeOpen} onOpenChange={setIsAmortizeOpen}>
-        <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[425px]">
+        <DialogContent className="bg-white border border-gray-200 shadow-lg rounded-xl w-full sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="text-2xl font-black uppercase">Amortizar Dívida</DialogTitle>
-            <DialogDescription className="font-medium text-gray-600">
-              Valor extra abatido do saldo devedor.
-            </DialogDescription>
+            <DialogDescription className="font-medium text-gray-600">Valor extra abatido do saldo devedor.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
@@ -715,16 +748,11 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* History */}
       <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
-        <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[500px]">
+        <DialogContent className="bg-white border border-gray-200 shadow-lg rounded-xl w-full sm:max-w-[500px]">
           <DialogHeader>
-            <DialogTitle className="text-2xl font-black uppercase">
-              Histórico: {selectedParticipant?.name}
-            </DialogTitle>
-            <DialogDescription className="font-medium text-gray-600">
-              Extrato completo de pagamentos e amortizações.
-            </DialogDescription>
+            <DialogTitle className="text-2xl font-black uppercase">Histórico: {selectedParticipant?.name}</DialogTitle>
+            <DialogDescription className="font-medium text-gray-600">Extrato completo de pagamentos e amortizações.</DialogDescription>
           </DialogHeader>
           <div className="py-4 space-y-6">
             {selectedParticipant && (
@@ -735,9 +763,7 @@ export default function Home() {
                     participantId={selectedParticipant.id}
                     transactions={allTransactions.filter((t) => t.participantId === selectedParticipant.id)}
                     monthlyPayments={selectedParticipant.monthlyPayments || []}
-                    onUnmarkPayment={(paymentId: number) => {
-                      // unmark é tratado pelo ParticipantCard agora
-                    }}
+                    onUnmarkPayment={(_paymentId: number) => {}}
                   />
                 </div>
                 <div className="border-t-2 border-black pt-4">
@@ -759,14 +785,11 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Loan */}
       <Dialog open={isEditLoanOpen} onOpenChange={setIsEditLoanOpen}>
-        <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[425px]">
+        <DialogContent className="bg-white border border-gray-200 shadow-lg rounded-xl w-full sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="text-2xl font-black uppercase">Editar Empréstimo</DialogTitle>
-            <DialogDescription className="font-medium text-gray-600">
-              Altere o valor total emprestado por {selectedParticipant?.name}.
-            </DialogDescription>
+            <DialogDescription className="font-medium text-gray-600">Altere o valor total emprestado por {selectedParticipant?.name}.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
@@ -784,14 +807,11 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Debt */}
       <Dialog open={isEditDebtOpen} onOpenChange={setIsEditDebtOpen}>
-        <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[425px]">
+        <DialogContent className="bg-white border border-gray-200 shadow-lg rounded-xl w-full sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="text-2xl font-black uppercase">Editar Saldo Devedor</DialogTitle>
-            <DialogDescription className="font-medium text-gray-600">
-              Altere o saldo devedor de {selectedParticipant?.name}.
-            </DialogDescription>
+            <DialogDescription className="font-medium text-gray-600">Altere o saldo devedor de {selectedParticipant?.name}.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
@@ -809,9 +829,8 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Name */}
       <Dialog open={isEditNameOpen} onOpenChange={setIsEditNameOpen}>
-        <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[425px]">
+        <DialogContent className="bg-white border border-gray-200 shadow-lg rounded-xl w-full sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="text-2xl font-black uppercase">Editar Nome</DialogTitle>
             <DialogDescription className="font-medium text-gray-600">Altere o nome do participante.</DialogDescription>
@@ -832,14 +851,11 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Email */}
       <Dialog open={isEditEmailOpen} onOpenChange={setIsEditEmailOpen}>
-        <DialogContent className="bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none w-full sm:max-w-[425px]">
+        <DialogContent className="bg-white border border-gray-200 shadow-lg rounded-xl w-full sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="text-2xl font-black uppercase">Editar Email</DialogTitle>
-            <DialogDescription className="font-medium text-gray-600">
-              Email para notificações de pagamento.
-            </DialogDescription>
+            <DialogDescription className="font-medium text-gray-600">Email para notificações de pagamento.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
@@ -857,56 +873,39 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Participant */}
       <ConfirmationModal
         isOpen={isDeleteConfirmOpen}
         title="Deletar Participante"
         description={selectedParticipant ? `Deletar ${selectedParticipant.name}? Esta ação não pode ser desfeita.` : ''}
-        confirmText="Deletar"
-        cancelText="Cancelar"
-        isDangerous={true}
+        confirmText="Deletar" cancelText="Cancelar" isDangerous={true}
         isLoading={deleteParticipantMutation.isPending}
         onConfirm={handleDeleteParticipant}
         onCancel={() => setIsDeleteConfirmOpen(false)}
       />
 
-      {/* Reset Month */}
       <ConfirmationModal
         isOpen={isResetConfirmOpen}
         title="Resetar Mês"
         description="Todos os pagamentos do mês atual serão zerados. Esta ação não pode ser desfeita."
-        confirmText="Resetar"
-        cancelText="Cancelar"
-        isDangerous={true}
+        confirmText="Resetar" cancelText="Cancelar" isDangerous={true}
         isLoading={resetMonthMutation.isPending}
         onConfirm={handleResetMonth}
         onCancel={() => setIsResetConfirmOpen(false)}
       />
 
-      {/* Import CSV */}
-      <ImportCSVModal
-        isOpen={isImportOpen}
-        onClose={() => setIsImportOpen(false)}
-        onImport={handleImportCSV}
-      />
+      <ImportCSVModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} onImport={handleImportCSV} />
 
-      {/* Debt Evolution Chart */}
       {chartParticipantId && (() => {
         const p = participants.find((p) => p.id === chartParticipantId);
         if (!p) return null;
-        const initialDebt = parseFloat(p.totalLoan?.toString() || '0');
-        const currentDebt = parseFloat(p.currentDebt?.toString() || '0');
         return (
           <DebtEvolutionChart
             isOpen={isChartOpen}
             onClose={() => { setIsChartOpen(false); setChartParticipantId(null); }}
             participantName={p.name || 'Desconhecido'}
-            data={[
-              { month: 'Inicial', debt: initialDebt, paid: 0 },
-              { month: 'Atual', debt: currentDebt, paid: initialDebt - currentDebt },
-            ]}
-            initialDebt={initialDebt}
-            currentDebt={currentDebt}
+            initialDebt={parseFloat(p.totalLoan?.toString() || '0')}
+            currentDebt={parseFloat(p.currentDebt?.toString() || '0')}
+            transactions={allTransactions.filter((t) => t.participantId === chartParticipantId)}
           />
         );
       })()}

@@ -4,8 +4,16 @@ import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { ArrowDownCircle, ArrowUpCircle, Wallet } from 'lucide-react';
 
+type TxRow = {
+  id: number | string;
+  type: string;
+  amount: number | string;
+  month?: string | null;
+  createdAt?: string | Date | null;
+};
+
 interface TransactionHistoryProps {
-  transactions?: any[];
+  transactions?: TxRow[];
   participantId?: number;
   monthlyPayments?: any[];
   onUnmarkPayment?: (paymentId: number) => void;
@@ -34,8 +42,8 @@ export function TransactionHistory({
   );
 
   return (
-    <ScrollArea className="h-[320px] w-full border-2 border-black">
-      <div className="divide-y-2 divide-black">
+    <ScrollArea className="h-[320px] w-full border border-gray-200 rounded-lg">
+      <div className="divide-y divide-gray-100">
         {sorted.map((t) => {
           const cfg = TYPE_CONFIG[t.type] ?? {
             label: t.type, icon: Wallet, color: 'text-gray-600', bg: 'bg-gray-50 border-gray-200',
@@ -45,7 +53,7 @@ export function TransactionHistory({
           const validDate = !isNaN(date.getTime());
 
           return (
-            <div key={t.id} className={`flex items-center gap-3 p-3 ${cfg.bg} border-l-4`}>
+            <div key={t.id} className={`flex items-center gap-3 p-3 ${cfg.bg} border-l-4 rounded-none`}>
               <div className={`${cfg.color} flex-shrink-0`}>
                 <Icon className="w-5 h-5" />
               </div>
