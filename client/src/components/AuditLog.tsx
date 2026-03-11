@@ -13,7 +13,8 @@ interface AuditLogEntry {
   year?: number | null;
   amount?: string | null;
   description?: string | null;
-  createdAt: Date;
+  // Atualizado para aceitar a tipagem flexível que vem do backend/tRPC
+  createdAt?: string | Date | null; 
 }
 
 interface AuditLogProps {
@@ -45,12 +46,16 @@ export function AuditLog({ entries = [] }: AuditLogProps) {
     );
   }
 
+  // Função segura para extrair o tempo da data sem quebrar caso seja null/undefined
+  const getTime = (dateValue?: string | Date | null) => 
+    dateValue ? new Date(dateValue).getTime() : 0;
+
   const sorted = [...entries].sort((a, b) =>
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    getTime(b.createdAt) - getTime(a.createdAt)
   );
 
   return (
-    <ScrollArea className="h-[320px] w-full border border-gray-200 rounded-lg">
+    <ScrollArea className="h-80 w-full border border-gray-200 rounded-lg">
       <div className="divide-y divide-gray-100">
         {sorted.map((entry) => {
           const cfg = ACTION_CONFIG[entry.action] ?? {
@@ -60,7 +65,9 @@ export function AuditLog({ entries = [] }: AuditLogProps) {
             badgeColor: 'bg-gray-100 text-gray-700 border-gray-300',
           };
           const Icon = cfg.icon;
-          const date = new Date(entry.createdAt);
+          
+          // Tratamento seguro para formatação da data
+          const date = entry.createdAt ? new Date(entry.createdAt) : new Date(NaN);
           const validDate = !isNaN(date.getTime());
 
           return (
@@ -68,7 +75,7 @@ export function AuditLog({ entries = [] }: AuditLogProps) {
               key={entry.id}
               className={`flex gap-3 p-3 border-l-4 ${cfg.borderColor} hover:bg-gray-50 transition-colors`}
             >
-              <div className="flex-shrink-0 mt-0.5">
+              <div className="shrink-0 mt-0.5">
                 <Icon className="w-4 h-4 text-gray-500" />
               </div>
               <div className="flex-1 min-w-0 space-y-1">
