@@ -1,5 +1,6 @@
 import { AlertTriangle, TrendingDown, DollarSign, Percent } from 'lucide-react';
 import { formatCurrency } from '@/lib/format-currency';
+import { calculateMonthlyInterest, calculateMonthlyTotal, calculateProgress } from '@/lib/finance';
 
 interface Debtor {
   id: number;

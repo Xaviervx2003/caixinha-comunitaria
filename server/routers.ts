@@ -480,7 +480,7 @@ export const appRouter = router({
             .where(
               and(
                 eq(participants.id, input.participantId),
-                eq(participants.caixinhaId, caixinha.id)
+                eq(participants.isActive, true)
               )
             )
             .for("update")

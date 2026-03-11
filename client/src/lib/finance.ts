@@ -1,94 +1,49 @@
-export type PaymentStatus = 'paid' | 'partial' | 'late' | 'clean';
+/**
+ * client/src/lib/finance.ts
+ * Utilitários de cálculo financeiro para o frontend.
+ * Usa Decimal.js (já instalado no projeto) para evitar
+ * anomalias de ponto flutuante do JavaScript.
+ */
 
-import Decimal from "decimal.js";
+import Decimal from 'decimal.js';
 
-export interface Transaction {
-  id: string;
-  type: 'loan' | 'payment' | 'amortization' | 'reversal';
-  amount: number;
-  date: string;
-  description?: string;
-}
+export const MONTHLY_FEE = 200;
+export const INTEREST_RATE = 0.10; // 10% ao mês sobre dívida ativa
 
-export interface Participant {
-  id: string;
-  name: string;
-  avatar?: string; // URL or initials
-  totalLoan: number; // Valor total original emprestado
-  currentDebt: number; // Saldo devedor atual (Principal)
-  monthlyFeePaid: boolean; // Se pagou a cota fixa do mês
-  interestPaid: boolean; // Se pagou os juros do mês
-  lastPaymentDate?: string;
-  transactions: Transaction[];
-}
-
-export const FIXED_FEE = 200; // Cota fixa mensal
-export const INTEREST_RATE = 0.10; // 10%
-
-// Calcula o valor de juros do mês atual baseado no saldo devedor
-export const calculateMonthlyInterest = (currentDebt: number): number => {
-  return new Decimal(currentDebt)
+/** Juros do mês = dívida × 10% */
+export function calculateMonthlyInterest(currentDebt: string | number): number {
+  const debt = new Decimal(currentDebt ?? 0);
+  if (debt.isNaN() || debt.lte(0)) return 0;
+  return debt
     .mul(INTEREST_RATE)
     .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
     .toNumber();
-};
+}
 
-// Calcula o total a pagar no mês (Cota + Juros)
-export const calculateMonthlyTotal = (currentDebt: number): number => {
-  return new Decimal(FIXED_FEE)
+/** Total mensal = R$200 + juros */
+export function calculateMonthlyTotal(currentDebt: string | number): number {
+  return new Decimal(MONTHLY_FEE)
     .add(calculateMonthlyInterest(currentDebt))
     .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
     .toNumber();
-};
+}
 
-// Determina o status do participante para as cores
-export const getParticipantStatus = (participant: Participant): 'green' | 'yellow' | 'red' => {
-  // VERDE: Sem dívidas (Saldo Devedor = 0)
-  // Nota: Se não tem dívida, assume-se que paga apenas a cota. 
-  // Se a cota não foi paga, tecnicamente seria vermelho, mas a regra diz:
-  // "VERDE: Se o participante não possui dívidas (Saldo Devedor = 0)."
-  if (participant.currentDebt <= 0) return 'green';
+/** Percentual amortizado = (emprestado - devendo) / emprestado */
+export function calculateProgress(
+  totalLoan: string | number,
+  currentDebt: string | number
+): number {
+  const total = new Decimal(totalLoan ?? 0);
+  const current = new Decimal(currentDebt ?? 0);
+  if (total.lte(0)) return 0;
+  const paid = total.sub(current);
+  const pct = paid.div(total).mul(100).toDecimalPlaces(1).toNumber();
+  return Math.min(100, Math.max(0, pct));
+}
 
-  // AMARELO: Tem empréstimo, mas juros do mês pagos (Cota pode ou não ter sido paga? 
-  // A regra diz: "AMARELO: Se o participante tem empréstimo, mas o valor de juros do mês já foi pago.")
-  // Vamos assumir que se pagou os juros, está amarelo.
-  if (participant.interestPaid) return 'yellow';
-
-  // VERMELHO: Tem empréstimo e não pagou (Cota + Juros)
-  return 'red';
-};
-
-export const formatCurrency = (value: number): string => {
-  return new Intl.NumberFormat('pt-BR', {
-    style: 'currency',
-    currency: 'BRL',
-  }).format(value);
-};
-
-export const calculateProgress = (totalLoan: number, currentDebt: number): number => {
-  if (totalLoan === 0) return 100;
-  const paid = totalLoan - currentDebt;
-  const percentage = (paid / totalLoan) * 100;
-  return Math.min(100, Math.max(0, percentage));
-};
-
-// Calcula o total de cotas pagas no mês
-export const calculateTotalMonthlyFees = (participants: Participant[]): number => {
-  return participants.reduce((acc, p) => {
-    if (p.monthlyFeePaid) return acc + FIXED_FEE;
-    return acc;
-  }, 0);
-};
-
-// Calcula o total de juros pagos no mês
-export const calculateTotalMonthlyInterest = (participants: Participant[]): number => {
-  return participants.reduce((acc, p) => {
-    if (p.interestPaid) return acc + calculateMonthlyInterest(p.currentDebt);
-    return acc;
-  }, 0);
-};
-
-// Calcula o total arrecadado (cotas + juros)
-export const calculateTotalFund = (participants: Participant[]): number => {
-  return calculateTotalMonthlyFees(participants) + calculateTotalMonthlyInterest(participants);
-};
+/** Parse seguro que nunca retorna NaN */
+export function safeNumber(value: string | number | null | undefined): number {
+  if (value === null || value === undefined || value === '') return 0;
+  const n = new Decimal(value);
+  return n.isNaN() ? 0 : n.toNumber();
+}

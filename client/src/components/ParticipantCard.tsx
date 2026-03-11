@@ -8,6 +8,7 @@ import { formatCurrency } from '@/lib/format-currency';
 import { useState } from 'react';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { showSuccessToast, showErrorToast } from '@/lib/toast-utils';
+import { calculateMonthlyInterest, calculateMonthlyTotal, calculateProgress } from '@/lib/finance';
 
 interface ParticipantCardProps {
   participant: any;
@@ -378,17 +379,3 @@ function getParticipantStatus(participant: any): 'green' | 'yellow' | 'red' {
   return 'red';
 }
 
-function calculateProgress(totalLoan: any, currentDebt: any): number {
-  const total = parseFloat(totalLoan);
-  const current = parseFloat(currentDebt);
-  if (total === 0) return 0;
-  return Math.round(((total - current) / total) * 100);
-}
-
-function calculateMonthlyInterest(currentDebt: any): number {
-  return parseFloat(currentDebt) * 0.10;
-}
-
-function calculateMonthlyTotal(currentDebt: any): number {
-  return 200 + calculateMonthlyInterest(currentDebt);
-}

@@ -69,6 +69,7 @@ export const participants = mysqlTable(
     currentDebt: decimal("currentDebt", { precision: 10, scale: 2 }).default("0").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    isActive: boolean("isActive").default(true).notNull(),
   },
   (table) => ({
     caixinhaIdx: index("idx_participants_caixinha").on(table.caixinhaId),
