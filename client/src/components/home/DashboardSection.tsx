@@ -3,6 +3,7 @@ import {
   Activity, Banknote, Calendar, Download, Percent,
   RotateCcw, TrendingDown, TrendingUp, Upload, History, FileText,
   CheckCircle2, XCircle, Clock, ChevronLeft, ChevronRight,
+  Wallet, HandCoins // Adicionados para o Cofre
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { formatCurrency } from '@/lib/format-currency';
@@ -316,6 +317,20 @@ export function DashboardSection({
 }: DashboardSectionProps) {
   const [isSnapshotOpen, setIsSnapshotOpen] = useState(false);
 
+  // ─── MATEMÁTICA DO "DINHEIRO PARADO" (LIQUIDEZ) ──────────────
+  // 1. Tudo o que entrou na conta (Mensalidades pagas + Amortizações)
+  const totalEntradas = allTransactions
+    .filter(t => t.type === 'payment' || t.type === 'amortization')
+    .reduce((acc, t) => acc + parseFloat(t.amount.toString()), 0);
+
+  // 2. Tudo o que saiu da conta (Empréstimos concedidos + Estornos)
+  const totalSaidas = allTransactions
+    .filter(t => t.type === 'loan' || t.type === 'reversal')
+    .reduce((acc, t) => acc + parseFloat(t.amount.toString()), 0);
+
+  // 3. O Dinheiro que está literalmente parado na conta bancária pronto a emprestar
+  const caixaDisponivel = totalEntradas - totalSaidas;
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
 
@@ -324,6 +339,43 @@ export function DashboardSection({
         participants={participants}
         dueDay={nextMonthEstimate?.dueDay ?? 5}
       />
+
+      {/* ── O COFRE GIGANTE (CAIXA DISPONÍVEL) ── */}
+      <div className="bg-gray-900 rounded-2xl p-6 md:p-8 text-white shadow-xl relative overflow-hidden border-4 border-gray-800">
+        <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+          <Wallet className="w-48 h-48" />
+        </div>
+        
+        <div className="relative z-10 flex flex-col md:flex-row justify-between md:items-end gap-6">
+          <div>
+            <div className="flex items-center gap-2 text-[#00C853] mb-2">
+              <HandCoins className="w-5 h-5" />
+              <span className="font-black uppercase tracking-widest text-xs">Caixa Disponível (Dinheiro Parado)</span>
+            </div>
+            <h1 className="text-5xl md:text-7xl font-black tracking-tighter">
+              {formatCurrency(caixaDisponivel)}
+            </h1>
+            <p className="text-gray-400 font-medium text-sm mt-2 max-w-md">
+              Este é o valor real que vocês têm em mãos hoje para aprovar novos empréstimos.
+            </p>
+          </div>
+          
+          <div className="flex flex-col gap-2 bg-black/40 p-4 rounded-xl backdrop-blur-sm border border-white/10 min-w-[250px]">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-gray-500 uppercase">Total Entradas</span>
+              <span className="text-sm font-black text-emerald-400">+{formatCurrency(totalEntradas)}</span>
+            </div>
+            <div className="flex justify-between items-center border-b border-white/5 pb-2 mb-1">
+              <span className="text-xs font-bold text-gray-500 uppercase">Total Emprestado</span>
+              <span className="text-sm font-black text-red-400">-{formatCurrency(totalSaidas)}</span>
+            </div>
+            <div className="flex justify-between items-center mt-1">
+              <span className="text-xs font-bold text-gray-400 uppercase">Saldo em Conta</span>
+              <span className="text-base font-black text-white">{formatCurrency(caixaDisponivel)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* ── Stat Cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -357,7 +409,7 @@ export function DashboardSection({
                 <TrendingUp className="w-5 h-5 text-[#00C853]" />
               </div>
               <div className="text-left">
-                <p className="text-gray-400 text-xs font-bold uppercase tracking-wider">Estimativa — {nextMonthEstimate.nextMonth}</p>
+                <p className="text-gray-400 text-xs font-bold uppercase tracking-wider">Potencial de Arrecadação — {nextMonthEstimate.nextMonth}</p>
                 <p className="text-3xl font-black text-[#00C853]">{formatCurrency(parseFloat(nextMonthEstimate.estimatedTotal))}</p>
               </div>
             </div>
@@ -433,6 +485,7 @@ export function DashboardSection({
             className="flex items-center gap-2 bg-purple-50 text-purple-600 border border-purple-200 px-4 py-2 rounded-lg font-bold text-sm hover:bg-purple-100 transition-colors">
             <History className="w-4 h-4" /> Histórico por Mês
           </button>
+          {/* BOTÃO DO PDF PRESERVADO E FUNCIONAL! */}
           <button onClick={() => generatePDF(participants, allTransactions, nextMonthEstimate?.dueDay ?? 5)}
             className="flex items-center gap-2 bg-gray-800 text-white border border-gray-700 px-4 py-2 rounded-lg font-bold text-sm hover:bg-gray-900 transition-colors">
             <FileText className="w-4 h-4" /> Relatório PDF

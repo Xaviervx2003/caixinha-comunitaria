@@ -9,7 +9,6 @@ import { useState } from 'react';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { showSuccessToast, showErrorToast } from '@/lib/toast-utils';
 
-// Importando a Fonte da Verdade partilhada com o Backend!
 import { 
   calculateProgress, 
   calculateMonthlyInterest, 
@@ -18,8 +17,26 @@ import {
   calcLatePaymentFee 
 } from '@/lib/finance';
 
+// 🌟 DICA 6: CRIANDO INTERFACES RÍGIDAS
+export interface MonthlyPaymentRecord {
+  id: number;
+  month: string;
+  year: number;
+  paid: boolean | number;
+}
+
+export interface AppParticipant {
+  id: number;
+  name: string;
+  email?: string | null;
+  totalLoan: string | number;
+  currentDebt: string | number;
+  monthlyPayments?: MonthlyPaymentRecord[];
+  interestPaid?: boolean;
+}
+
 interface ParticipantCardProps {
-  participant: any;
+  participant: AppParticipant; // ADEUS 'any'! O TypeScript agora protege esta variável.
   onPayment?: () => void;
   onAmortize?: () => void;
   onAddLoan?: () => void;
@@ -89,8 +106,9 @@ export function ParticipantCard({
     onError: (error) => showErrorToast(error.message),
   });
 
+  // Tipagem forte também nos métodos internos
   const getPaidRecord = (monthValue: string, year: number) => {
-    return monthlyPayments.find((p: any) => p.month === `${year}-${monthValue}` && p.year === year && (p.paid === true || p.paid === 1));
+    return monthlyPayments.find((p: MonthlyPaymentRecord) => p.month === `${year}-${monthValue}` && p.year === year && (p.paid === true || p.paid === 1));
   };
 
   const handleMonthClick = (monthValue: string, year: number, label: string) => {
@@ -115,11 +133,11 @@ export function ParticipantCard({
   const handleConfirmPay = async () => {
     if (!monthToPay) return;
     
-    // O TypeScript agora ficará feliz, pois removemos o paymentDate que não existia no schema do backend
     await paymentMutation.mutateAsync({
       participantId: participant.id,
       month: `${monthToPay.year}-${monthToPay.monthValue}`,
       year: monthToPay.year,
+      paymentDate: paymentDate,
     });
   };
 
@@ -133,7 +151,11 @@ export function ParticipantCard({
 
   const baseMonthlyTotal = calculateMonthlyTotal(participant.currentDebt);
   
-  // Lógica dinâmica de Multa conectada à Fonte da Verdade
+  const totalAmortizado = Math.max(0, parseFloat(participant.totalLoan as string || '0') - parseFloat(participant.currentDebt as string || '0'));
+  // Tipagem substituindo (p: any) por (p: MonthlyPaymentRecord)
+  const paidMonthsCount = monthlyPayments.filter((p: MonthlyPaymentRecord) => p.paid === true || p.paid === 1).length;
+  const totalPagoAproximado = totalAmortizado + (paidMonthsCount * 200);
+  
   let modalPenalty = 0;
   if (monthToPay && paymentDate) {
     const isLate = isLatePayment(`${monthToPay.year}-${monthToPay.monthValue}`, new Date(paymentDate));
@@ -141,13 +163,12 @@ export function ParticipantCard({
       modalPenalty = calcLatePaymentFee().totalLateCharge.toNumber();
     }
   }
-  
   const modalTotal = baseMonthlyTotal + modalPenalty;
 
   return (
     <div className="bg-white border-2 border-slate-200 shadow-sm rounded-xl p-5 flex flex-col gap-5 hover:border-slate-300 transition-colors">
       
-      {/* HEADER - FONTES FORTES E MAIÚSCULAS */}
+      {/* HEADER */}
       <div className="flex justify-between items-start gap-3 cursor-pointer group" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center shrink-0 border-2 border-slate-200">
@@ -165,16 +186,26 @@ export function ParticipantCard({
         </Badge>
       </div>
 
-      {/* DÍVIDA - NÚMEROS GIGANTES E PESADOS */}
+      {/* DÍVIDA E TOTAL PAGO */}
       <div className="bg-slate-50 border-2 border-slate-200 rounded-lg p-4 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => setIsExpanded(!isExpanded)}>
-        <div className="flex justify-between items-center mb-2">
+        <div className="flex justify-between items-center mb-1">
           <span className="text-xs font-bold text-gray-600 uppercase tracking-widest">Saldo Devedor</span>
           <span className="text-2xl font-black text-black tracking-tighter">{formatCurrency(participant.currentDebt)}</span>
         </div>
-        {parseFloat(participant.totalLoan) > 0 && (
-          <div className="space-y-1.5 mt-3">
+        
+        <div className="flex justify-between items-center mb-3">
+          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1">
+            <CheckCircle2 className="w-3 h-3" /> Total Já Pago
+          </span>
+          <span className="text-sm font-black text-emerald-600 tracking-tighter">
+            {formatCurrency(totalPagoAproximado)}
+          </span>
+        </div>
+
+        {parseFloat(participant.totalLoan as string) > 0 && (
+          <div className="space-y-1.5 mt-3 pt-3 border-t border-slate-200 border-dashed">
             <div className="flex justify-between items-center">
-              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Progresso</span>
+              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Progresso do Empréstimo</span>
               <span className="text-[11px] font-black text-black">{progress}%</span>
             </div>
             <div className="w-full h-2.5 bg-gray-200 rounded-full overflow-hidden border border-gray-300">
@@ -199,7 +230,6 @@ export function ParticipantCard({
             </div>
           </div>
 
-          {/* MESES - ESTILO BLOCO FORTE */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-sm font-black text-black uppercase tracking-tight">Mensalidades</span>
@@ -231,12 +261,11 @@ export function ParticipantCard({
             </div>
           </div>
 
-          {/* BOTÕES PESADOS */}
           <div className="grid grid-cols-2 gap-3 pt-2">
             <Button onClick={(e) => { e.stopPropagation(); onPayment?.(); }} className="bg-black text-white hover:bg-gray-800 rounded-lg h-12 font-black uppercase tracking-wider text-xs">
               <Wallet className="w-4 h-4 mr-2 stroke-[2.5]" /> Pagar
             </Button>
-            <Button onClick={(e) => { e.stopPropagation(); onAmortize?.(); }} disabled={participant.currentDebt <= 0} variant="outline" className="rounded-lg h-12 border-2 border-slate-300 text-black font-black uppercase tracking-wider text-xs hover:bg-slate-50">
+            <Button onClick={(e) => { e.stopPropagation(); onAmortize?.(); }} disabled={parseFloat(participant.currentDebt as string) <= 0} variant="outline" className="rounded-lg h-12 border-2 border-slate-300 text-black font-black uppercase tracking-wider text-xs hover:bg-slate-50">
               <TrendingDown className="w-4 h-4 mr-2 stroke-[2.5]" /> Amortizar
             </Button>
           </div>
@@ -250,7 +279,6 @@ export function ParticipantCard({
             </Button>
           </div>
 
-          {/* CONFIGURAÇÕES E APAGAR */}
           <div className="pt-4 border-t-2 border-slate-100">
             <div className="flex justify-between items-center mb-3">
               <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Opções</span>
@@ -342,9 +370,9 @@ export function ParticipantCard({
   );
 }
 
-// Apenas esta função local permaneceu, porque lida com UI (Status) e não com matemática financeira!
-function getParticipantStatus(participant: any): 'green' | 'yellow' | 'red' {
-  const debt = parseFloat(participant.currentDebt);
+// A função local agora usa a nova Interface AppParticipant
+function getParticipantStatus(participant: AppParticipant): 'green' | 'yellow' | 'red' {
+  const debt = parseFloat(participant.currentDebt as string);
   if (debt === 0) return 'green';
   if (participant.interestPaid) return 'yellow';
   return 'red';

@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Plus, PiggyBank, AlertTriangle, LayoutDashboard, Users,
-  ArrowLeftRight, Settings, RotateCcw, Download, Upload,
+  ArrowLeftRight, Settings, RotateCcw, Download, Upload, Search
 } from 'lucide-react';
 import { OfflineIndicator } from '@/components/OfflineIndicator';
 import { useLocalCache } from '@/hooks/use-local-cache';
@@ -104,7 +104,8 @@ export default function Home() {
   const [isEstimateExpanded, setIsEstimateExpanded] = useState(false);
   const [chartParticipantId, setChartParticipantId] = useState<number | null>(null);
 
-  // ── Estados dos Formulários ─────────────────────────────────
+  // ── Estados dos Formulários e Busca ─────────────────────────
+  const [searchQuery, setSearchQuery] = useState(''); // <-- ESTADO DA BARRA DE PESQUISA
   const [newParticipantName, setNewParticipantName] = useState('');
   const [newParticipantEmail, setNewParticipantEmail] = useState('');
   const [newParticipantLoan, setNewParticipantLoan] = useState('');
@@ -117,6 +118,7 @@ export default function Home() {
   const [editEmailValue, setEditEmailValue] = useState('');
   const [paymentMonth, setPaymentMonth] = useState(String(new Date().getMonth() + 1).padStart(2, '0'));
   const [paymentYear, setPaymentYear] = useState(new Date().getFullYear().toString());
+  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [settingsDueDay, setSettingsDueDay] = useState('5');
   const [settingsName, setSettingsName] = useState('');
 
@@ -131,6 +133,11 @@ export default function Home() {
   const totalFees = paymentCount * MONTHLY_FEE + totalAmortizationAmount;
   const totalInterest = totalPaymentAmount - paymentCount * MONTHLY_FEE;
   const totalDebts = participants.reduce((acc, p) => acc + parseFloat(p.currentDebt.toString()), 0);
+
+  // ── Lógica de Filtragem de Participantes ────────────────────
+  const filteredParticipants = participants.filter((p) =>
+    p.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   // ── Handlers ────────────────────────────────────────────────
   const handleAddParticipant = async () => {
@@ -153,7 +160,7 @@ export default function Home() {
   const handlePayment = async () => {
     if (!selectedParticipantId) return;
     try {
-      await paymentMutation.mutateAsync({ participantId: selectedParticipantId, month: `${paymentYear}-${paymentMonth}`, year: parseInt(paymentYear) });
+      await paymentMutation.mutateAsync({ participantId: selectedParticipantId, month: `${paymentYear}-${paymentMonth}`, year: parseInt(paymentYear),paymentDate: paymentDate });
       setIsPaymentOpen(false);
       showSuccessToast(`Pagamento registrado!`);
     } catch { showErrorToast('Erro ao registrar pagamento'); }
@@ -341,7 +348,7 @@ export default function Home() {
                 <div className="flex items-center justify-center py-20">
                   <div className="text-center">
                     <div className="w-8 h-8 border-2 border-[#00C853] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-                    <p className="text-gray-500 text-sm">Carregando participantes...</p>
+                    <p className="text-gray-500 text-sm">A carregar participantes...</p>
                   </div>
                 </div>
               ) : participants.length === 0 ? (
@@ -357,23 +364,57 @@ export default function Home() {
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
-                  {participants.map((participant) => (
-                    <ParticipantCard
-                      key={participant.id}
-                      participant={participant}
-                      onPayment={() => { setSelectedParticipantId(participant.id); setIsPaymentOpen(true); }}
-                      onAmortize={() => { setSelectedParticipantId(participant.id); setAmortizeAmount(''); setIsAmortizeOpen(true); }}
-                      onAddLoan={() => { setSelectedParticipantId(participant.id); setLoanAmount(''); setIsAddLoanOpen(true); }}
-                      onViewHistory={() => { setSelectedParticipantId(participant.id); setIsHistoryOpen(true); }}
-                      onEditLoan={() => { setSelectedParticipantId(participant.id); setEditLoanAmount(parseFloat(participant.totalLoan.toString()).toString()); setIsEditLoanOpen(true); }}
-                      onEditDebt={() => { setSelectedParticipantId(participant.id); setEditDebtAmount(parseFloat(participant.currentDebt.toString()).toString()); setIsEditDebtOpen(true); }}
-                      onEditName={() => { setSelectedParticipantId(participant.id); setEditNameValue(participant.name); setIsEditNameOpen(true); }}
-                      onEditEmail={() => { setSelectedParticipantId(participant.id); setEditEmailValue(participant.email || ''); setIsEditEmailOpen(true); }}
-                      onDelete={() => { setSelectedParticipantId(participant.id); setIsDeleteConfirmOpen(true); }}
-                      onViewChart={() => { setChartParticipantId(participant.id); setIsChartOpen(true); }}
-                    />
-                  ))}
+                <div className="space-y-6">
+                  {/* Cabeçalho e Barra de Busca */}
+                  <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <div className="bg-[#00C853]/10 text-[#00C853] p-2 rounded-lg">
+                        <Users className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h2 className="font-black text-gray-800 uppercase tracking-tight">Membros Ativos</h2>
+                        <p className="text-xs text-gray-500 font-bold">{participants.length} participantes registados</p>
+                      </div>
+                    </div>
+                    <div className="relative w-full sm:w-80">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <Input
+                        placeholder="Buscar por nome..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="pl-9 border-2 border-gray-200 rounded-xl focus:border-[#00C853] transition-colors h-11 font-medium"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Lista Filtrada */}
+                  {filteredParticipants.length === 0 ? (
+                    <div className="py-16 text-center bg-white rounded-xl border border-gray-200 border-dashed">
+                      <p className="text-gray-400 font-bold">Nenhum participante encontrado para "{searchQuery}"</p>
+                      <button onClick={() => setSearchQuery('')} className="text-[#00C853] text-sm font-bold mt-2 hover:underline">
+                        Limpar pesquisa
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+                      {filteredParticipants.map((participant) => (
+                        <ParticipantCard
+                          key={participant.id}
+                          participant={participant}
+                          onPayment={() => { setSelectedParticipantId(participant.id); setIsPaymentOpen(true); }}
+                          onAmortize={() => { setSelectedParticipantId(participant.id); setAmortizeAmount(''); setIsAmortizeOpen(true); }}
+                          onAddLoan={() => { setSelectedParticipantId(participant.id); setLoanAmount(''); setIsAddLoanOpen(true); }}
+                          onViewHistory={() => { setSelectedParticipantId(participant.id); setIsHistoryOpen(true); }}
+                          onEditLoan={() => { setSelectedParticipantId(participant.id); setEditLoanAmount(parseFloat(participant.totalLoan.toString()).toString()); setIsEditLoanOpen(true); }}
+                          onEditDebt={() => { setSelectedParticipantId(participant.id); setEditDebtAmount(parseFloat(participant.currentDebt.toString()).toString()); setIsEditDebtOpen(true); }}
+                          onEditName={() => { setSelectedParticipantId(participant.id); setEditNameValue(participant.name); setIsEditNameOpen(true); }}
+                          onEditEmail={() => { setSelectedParticipantId(participant.id); setEditEmailValue(participant.email || ''); setIsEditEmailOpen(true); }}
+                          onDelete={() => { setSelectedParticipantId(participant.id); setIsDeleteConfirmOpen(true); }}
+                          onViewChart={() => { setChartParticipantId(participant.id); setIsChartOpen(true); }}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -391,6 +432,9 @@ export default function Home() {
             </div>
           )}
 
+          
+          
+          
           {/* ── TRANSAÇÕES ─────────────────────────────────────── */}
           {activeSection === 'transacoes' && (
             <div className="max-w-4xl mx-auto space-y-6">
@@ -570,6 +614,7 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
+      {/* MODAL DE PAGAMENTO (COM O CAMPO DE DATA ADICIONADO) */}
       <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
         <DialogContent className="bg-white rounded-xl border-0 shadow-2xl w-full sm:max-w-[425px]">
           <DialogHeader>
@@ -577,14 +622,26 @@ export default function Home() {
             <DialogDescription>Pagamento de {selectedParticipant?.name}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
+            
+            {/* NOVO CAMPO DE DATA */}
             <div className="grid gap-2">
-              <Label className="font-bold text-sm">Mês</Label>
+              <Label className="font-bold text-sm">Data Real do Pagamento</Label>
+              <Input 
+                type="date" 
+                value={paymentDate} 
+                onChange={(e) => setPaymentDate(e.target.value)} 
+                className="border-2 rounded-lg h-11 font-medium" 
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label className="font-bold text-sm">Mês Referência</Label>
               <select value={paymentMonth} onChange={(e) => setPaymentMonth(e.target.value)} className="border-2 border-gray-200 rounded-lg h-11 px-3 font-medium text-sm focus:outline-none focus:border-[#00C853]">
                 {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
             </div>
             <div className="grid gap-2">
-              <Label className="font-bold text-sm">Ano</Label>
+              <Label className="font-bold text-sm">Ano Referência</Label>
               <select value={paymentYear} onChange={(e) => setPaymentYear(e.target.value)} className="border-2 border-gray-200 rounded-lg h-11 px-3 font-medium text-sm focus:outline-none focus:border-[#00C853]">
                 {years.map(y => <option key={y} value={y}>{y}</option>)}
               </select>

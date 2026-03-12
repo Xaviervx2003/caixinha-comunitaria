@@ -8,7 +8,7 @@ import { getCaixinhaOrThrow, getParticipantOrThrow, monthSchema, participantIdSc
 import { z } from "zod";
 import Decimal from "decimal.js";
 import { TRPCError } from "@trpc/server";
- 
+
 export const transactionsProcedures = {
   getMonthlyPayments: protectedProcedure.input(z.object({ participantId: participantIdSchema })).query(async ({ input, ctx }) => {
     const db = await getDb();
@@ -16,14 +16,14 @@ export const transactionsProcedures = {
     await getParticipantOrThrow(db, input.participantId, caixinha.id);
     return db.select().from(monthlyPayments).where(eq(monthlyPayments.participantId, input.participantId));
   }),
- 
+
   getTransactions: protectedProcedure.input(z.object({ participantId: participantIdSchema })).query(async ({ input, ctx }) => {
     const db = await getDb();
     const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
     await getParticipantOrThrow(db, input.participantId, caixinha.id);
     return db.select().from(transactions).where(eq(transactions.participantId, input.participantId));
   }),
- 
+
   getAllTransactions: protectedProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
@@ -43,7 +43,7 @@ export const transactionsProcedures = {
       .innerJoin(participants, eq(participants.id, transactions.participantId))
       .where(eq(participants.caixinhaId, caixinha.id));
   }),
- 
+
   getAuditLog: protectedProcedure.input(z.object({ participantId: participantIdSchema.optional(), limit: z.number().int().min(1).max(200).default(50) })).query(async ({ input, ctx }) => {
     const db = await getDb();
     const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
@@ -67,7 +67,7 @@ export const transactionsProcedures = {
       .where(eq(participants.caixinhaId, caixinha.id))
       .limit(input.limit);
   }),
- 
+
   addLoan: protectedProcedure.input(z.object({ participantId: participantIdSchema, amount: z.coerce.number().positive().max(999999.99) })).mutation(async ({ input, ctx }) => {
     const db = await getDb();
     const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
@@ -84,7 +84,7 @@ export const transactionsProcedures = {
       return { success: true };
     });
   }),
- 
+
   registerPayment: protectedProcedure
     .input(z.object({
       participantId: participantIdSchema,
@@ -97,7 +97,7 @@ export const transactionsProcedures = {
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
- 
+
       if (input.idempotencyKey) {
         const [existing] = await db.select().from(transactions)
           .innerJoin(participants, eq(participants.id, transactions.participantId))
@@ -105,13 +105,13 @@ export const transactionsProcedures = {
           .limit(1);
         if (existing) return { success: true, isLate: false };
       }
- 
+
       return db.transaction(async (tx) => {
         const [p] = await tx.select().from(participants)
           .where(and(eq(participants.id, input.participantId), eq(participants.isActive, true)))
           .for("update").limit(1);
         if (!p) throw new TRPCError({ code: "NOT_FOUND" });
- 
+
         const existingPayment = await tx.select().from(monthlyPayments)
           .where(and(
             eq(monthlyPayments.participantId, input.participantId),
@@ -120,20 +120,20 @@ export const transactionsProcedures = {
           )).limit(1);
         if (existingPayment.length > 0 && existingPayment[0].paid === true)
           throw new TRPCError({ code: "CONFLICT", message: "Mês já pago." });
- 
+
         // ✅ USA A DATA INFORMADA — não mais new Date() (hoje)
         const paymentDate = input.paymentDate
           ? new Date(input.paymentDate + 'T12:00:00')
           : new Date();
- 
+
         const late = isLatePayment(input.month, paymentDate, caixinha.paymentDueDay ?? 5);
         const currentDebt = new Decimal(p.currentDebt);
         const calc = late
           ? calcLateMonthlyPayment(currentDebt)
           : { ...calcMonthlyPayment(currentDebt), isLate: false, lateFee: new Decimal(0), lateInterest: new Decimal(0), totalLateCharge: new Decimal(0) };
- 
+
         const paidAt = paymentDate;
- 
+
         if (existingPayment.length > 0) {
           await tx.update(monthlyPayments)
             .set({ paid: true, paidLate: late, paidAt })
@@ -148,11 +148,11 @@ export const transactionsProcedures = {
             paidAt,
           });
         }
- 
+
         const description = late
           ? `Cota R$ 200,00 + Juros R$ ${calc.interest.toFixed(2)} + Multa R$ ${calc.lateFee?.toFixed(2)} + Mora R$ ${calc.lateInterest?.toFixed(2)} (ATRASO)`
           : `Cota R$ 200,00 + Juros R$ ${calc.interest.toFixed(2)}`;
- 
+
         try {
           await tx.insert(transactions).values({
             participantId: input.participantId,
@@ -169,7 +169,7 @@ export const transactionsProcedures = {
           if (e?.errno === 1062) return { success: true, isLate: late };
           throw e;
         }
- 
+
         await tx.insert(auditLog).values({
           participantId: input.participantId,
           participantName: p.name,
@@ -179,11 +179,11 @@ export const transactionsProcedures = {
           amount: calc.total.toFixed(2),
           description,
         });
- 
+
         return { success: true, isLate: late, total: calc.total.toFixed(2) };
       });
     }),
- 
+
   registerAmortization: protectedProcedure.input(z.object({ participantId: participantIdSchema, amount: z.coerce.number().positive().max(999999.99) })).mutation(async ({ input, ctx }) => {
     const db = await getDb();
     const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
@@ -200,7 +200,7 @@ export const transactionsProcedures = {
       return { success: true };
     });
   }),
- 
+
   unmarkPayment: protectedProcedure.input(z.object({ paymentId: z.number().int().positive(), participantId: participantIdSchema })).mutation(async ({ input, ctx }) => {
     const db = await getDb();
     const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
@@ -209,7 +209,7 @@ export const transactionsProcedures = {
       if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Participante não encontrado." });
       const [payment] = await tx.select().from(monthlyPayments).where(eq(monthlyPayments.id, input.paymentId)).limit(1);
       if (!payment) throw new TRPCError({ code: "NOT_FOUND", message: "Pagamento não encontrado." });
- 
+
       await tx.update(monthlyPayments).set({ paid: false }).where(eq(monthlyPayments.id, input.paymentId));
       const [originalTx] = await tx.select().from(transactions).where(and(
         eq(transactions.participantId, input.participantId),
@@ -217,12 +217,12 @@ export const transactionsProcedures = {
         eq(transactions.month, payment.month),
         eq(transactions.year, payment.year),
       )).limit(1);
- 
+
       const currentDebt = new Decimal(p.currentDebt);
       const reversalAmountStr = originalTx
         ? new Decimal(originalTx.amount).abs().toFixed(2)
         : calcMonthlyPayment(currentDebt).total.toFixed(2);
- 
+
       await tx.delete(transactions).where(and(
         eq(transactions.participantId, input.participantId),
         eq(transactions.type, "payment"),
@@ -240,21 +240,21 @@ export const transactionsProcedures = {
       return { success: true };
     });
   }),
- 
+
   resetMonth: protectedProcedure.input(z.object({ month: monthSchema, year: z.number().int().min(2020).max(2100) }).optional()).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
     const now = new Date();
     const month = input?.month ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     const year = input?.year ?? now.getFullYear();
- 
+
     return db.transaction(async (tx) => {
       const payments = await tx.select({ mp: monthlyPayments, participant: participants })
         .from(monthlyPayments)
         .innerJoin(participants, eq(participants.id, monthlyPayments.participantId))
         .where(and(eq(participants.caixinhaId, caixinha.id), eq(monthlyPayments.month, month), eq(monthlyPayments.year, year), eq(monthlyPayments.paid, true)));
       if (payments.length === 0) return { success: true, reset: 0 };
- 
+
       for (const { mp, participant } of payments) {
         await tx.update(monthlyPayments).set({ paid: false }).where(eq(monthlyPayments.id, mp.id));
         const [originalTx] = await tx.select().from(transactions).where(and(
@@ -274,4 +274,3 @@ export const transactionsProcedures = {
     });
   }),
 };
- 
