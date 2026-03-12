@@ -460,6 +460,7 @@ export default function Home() {
                 totalLoan: parseFloat(p.totalLoan.toString()),
                 currentDebt: parseFloat(p.currentDebt.toString()),
                 monthlyInterest: parseFloat(p.currentDebt.toString()) * 0.1,
+                role: p.role as 'member' | 'external',
               }))} />
             </div>
           )}

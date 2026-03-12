@@ -1,28 +1,44 @@
-import mysql from "mysql2/promise";
-import { config } from "dotenv";
+import mysql from 'mysql2/promise';
+import 'dotenv/config';
 
-config();
+async function limparBanco() {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) {
+    console.error("❌ ERRO: DATABASE_URL não encontrada no ficheiro .env");
+    process.exit(1);
+  }
 
-const conn = await mysql.createConnection(process.env.DATABASE_URL);
+  try {
+    const conn = await mysql.createConnection(dbUrl);
+    console.log("⏳ Conectado ao banco. Iniciando limpeza profunda...");
 
-await conn.execute("SET FOREIGN_KEY_CHECKS = 0");
+    // 1. Desliga a verificação de chaves estrangeiras (O segredo para não dar erro!)
+    await conn.query('SET FOREIGN_KEY_CHECKS = 0;');
 
-const tables = [
-  "auditLog",
-  "caixinhaShares", 
-  "monthlySummary",
-  "monthlyPayments",
-  "transactions",
-  "participants",
-  "caixinhaMetadata",
-  "users",
-];
+    // 2. Busca o nome de todas as tabelas do seu banco de dados
+    const [tables] = await conn.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = DATABASE();
+    `);
 
-for (const t of tables) {
-  await conn.execute(`DROP TABLE IF EXISTS \`${t}\``);
-  console.log("Dropped:", t);
+    // 3. Deleta cada tabela encontrada
+    for (const t of tables) {
+      const tableName = t.table_name || t.TABLE_NAME;
+      await conn.query(`DROP TABLE IF EXISTS \`${tableName}\`;`);
+      console.log(`🗑️  Tabela '${tableName}' apagada.`);
+    }
+
+    // 4. Volta a ligar a verificação de chaves estrangeiras por segurança
+    await conn.query('SET FOREIGN_KEY_CHECKS = 1;');
+    
+    console.log("✅ Banco de dados completamente zerado com sucesso!");
+    process.exit(0);
+
+  } catch (error) {
+    console.error("❌ Erro ao limpar o banco:", error);
+    process.exit(1);
+  }
 }
 
-await conn.execute("SET FOREIGN_KEY_CHECKS = 1");
-await conn.end();
-console.log("Pronto!");
+limparBanco();

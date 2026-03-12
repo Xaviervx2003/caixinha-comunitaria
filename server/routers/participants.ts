@@ -12,7 +12,10 @@ export const participantsProcedures = {
   listParticipants: protectedProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
-    const rows = await db.select().from(participants).leftJoin(monthlyPayments, eq(monthlyPayments.participantId, participants.id)).where(eq(participants.caixinhaId, caixinha.id));
+    const rows = await db.select()
+      .from(participants)
+      .leftJoin(monthlyPayments, eq(monthlyPayments.participantId, participants.id))
+      .where(eq(participants.caixinhaId, caixinha.id));
     
     const grouped = rows.reduce((acc: Record<number, any>, row) => {
       const id = row.participants.id;
@@ -24,15 +27,56 @@ export const participantsProcedures = {
   }),
 
   addParticipant: protectedProcedure
-    .input(z.object({ name: z.string().min(1).max(255), email: z.string().email().max(320).optional(), totalLoan: z.coerce.number().nonnegative().max(999999.99).default(0) }))
+    .input(z.object({ 
+      name: z.string().min(1).max(255), 
+      email: z.string().email().max(320).optional(), 
+      totalLoan: z.coerce.number().nonnegative().max(999999.99).default(0),
+      role: z.enum(["member", "external"]).default("member") // 🟢 NOVO: O Backend agora aceita e valida a etiqueta
+    }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
 
       return db.transaction(async (tx) => {
-        const result = await tx.insert(participants).values({ caixinhaId: caixinha.id, name: input.name, email: input.email ?? null, totalLoan: input.totalLoan.toString(), currentDebt: input.totalLoan.toString() });
-        await tx.insert(auditLog).values({ participantId: Number(result[0].insertId), participantName: input.name, action: "participant_created", description: `Participante criado com empréstimo inicial de R$ ${input.totalLoan.toFixed(2)}` });
-        return { success: true };
+        const [result] = await tx.insert(participants).values({ 
+          caixinhaId: caixinha.id, 
+          name: input.name, 
+          email: input.email ?? null, 
+          totalLoan: input.totalLoan.toFixed(2), 
+          currentDebt: input.totalLoan.toFixed(2),
+          role: input.role // 🟢 NOVO: Guarda no banco de dados se é externo ou membro
+        });
+
+        const newId = result.insertId;
+
+        // Se a pessoa já entrar a dever, cria a transação oficial no histórico
+        if (input.totalLoan > 0) {
+          await tx.insert(auditLog).values({ 
+            participantId: newId, 
+            participantName: input.name, 
+            action: "loan_added", 
+            amount: input.totalLoan.toFixed(2),
+            description: `Empréstimo inicial de R$ ${input.totalLoan.toFixed(2)}` 
+          });
+
+          await tx.insert(transactions).values({
+            participantId: newId,
+            type: "loan",
+            amount: input.totalLoan.toFixed(2),
+            balanceBefore: "0.00",
+            balanceAfter: input.totalLoan.toFixed(2),
+            description: "Empréstimo Inicial",
+          });
+        }
+
+        await tx.insert(auditLog).values({ 
+          participantId: newId, 
+          participantName: input.name, 
+          action: "participant_created", 
+          description: `Participante adicionado como ${input.role === 'external' ? 'Tomador Externo' : 'Membro'}` 
+        });
+        
+        return { success: true, participantId: newId };
       });
     }),
 

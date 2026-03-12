@@ -12,7 +12,8 @@ import { showErrorToast, showSuccessToast } from '@/lib/toast-utils';
 import { Participant, Transaction } from './types';
 import { VencimentoAlert } from '@/components/VencimentoAlert';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-
+import { CycleClosingModal } from '../CycleClosingModal';
+import { Award } from 'lucide-react';
 // ── Tipos ────────────────────────────────────────────────────
 type NextMonthEstimate = {
   nextMonth: string;
@@ -316,7 +317,7 @@ export function DashboardSection({
   onViewAllParticipants,
 }: DashboardSectionProps) {
   const [isSnapshotOpen, setIsSnapshotOpen] = useState(false);
-
+  const [isClosingOpen, setIsClosingOpen] = useState(false);
   // ─── MATEMÁTICA DO "DINHEIRO PARADO" (LIQUIDEZ) ──────────────
   // 1. Tudo o que entrou na conta (Mensalidades pagas + Amortizações)
   const totalEntradas = allTransactions
@@ -492,7 +493,10 @@ export function DashboardSection({
           </button>
         </div>
       </div>
-
+<button onClick={() => setIsClosingOpen(true)}
+            className="flex items-center gap-2 bg-gradient-to-r from-amber-500 to-yellow-600 text-white border-0 shadow-lg px-4 py-2 rounded-lg font-black text-sm hover:from-amber-600 hover:to-yellow-700 transition-all transform hover:scale-105">
+            <Award className="w-4 h-4" /> Distribuição de Lucros
+          </button>
       {/* ── Resumo dos Membros ── */}
       <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
         <div className="flex items-center justify-between mb-4">
@@ -531,7 +535,13 @@ export function DashboardSection({
 
       {/* ── Modal Snapshot ── */}
       <MonthSnapshotModal isOpen={isSnapshotOpen} onClose={() => setIsSnapshotOpen(false)} />
-
+{/* ── Modal de Fechamento de Ciclo (Dividendos) ── */}
+      <CycleClosingModal 
+        isOpen={isClosingOpen} 
+        onClose={() => setIsClosingOpen(false)} 
+        participants={participants} 
+        allTransactions={allTransactions} 
+      />
     </div>
   );
 }
