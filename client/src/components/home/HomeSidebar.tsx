@@ -1,4 +1,5 @@
-import { PiggyBank, ChevronRight } from 'lucide-react';
+import { PiggyBank, ChevronRight, LogOut } from 'lucide-react';
+import { trpc } from '@/lib/trpc';
 import { NavSection } from './types';
 
 type NavItem = {
@@ -24,6 +25,11 @@ export function HomeSidebar({
   userName,
   onSelectSection,
 }: HomeSidebarProps) {
+  const utils = trpc.useUtils();
+  const logoutMutation = trpc.auth.logout.useMutation({
+    onSuccess: () => utils.auth.me.invalidate(),
+  });
+
   return (
     <aside
       className={`
@@ -33,6 +39,7 @@ export function HomeSidebar({
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}
     >
+      {/* Logo */}
       <div className="px-6 py-6 border-b border-white/10">
         <div className="flex items-center gap-3">
           <div className="bg-[#00C853] p-2 rounded-lg">
@@ -45,6 +52,7 @@ export function HomeSidebar({
         </div>
       </div>
 
+      {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         <p className="text-xs font-bold text-gray-500 uppercase tracking-widest px-3 mb-3">Menu</p>
         {navItems.map((item) => {
@@ -76,8 +84,9 @@ export function HomeSidebar({
         })}
       </nav>
 
-      <div className="px-4 py-4 border-t border-white/10">
-        <div className="flex items-center gap-3">
+      {/* Rodapé: usuário + logout */}
+      <div className="px-3 py-4 border-t border-white/10 space-y-1">
+        <div className="flex items-center gap-3 px-3 py-2">
           <div className="w-8 h-8 rounded-full bg-[#00C853]/20 flex items-center justify-center flex-shrink-0">
             <span className="text-[#00C853] text-xs font-black">{userName?.charAt(0)?.toUpperCase()}</span>
           </div>
@@ -86,6 +95,15 @@ export function HomeSidebar({
             <p className="text-gray-500 text-xs truncate">Beta v2.0</p>
           </div>
         </div>
+
+        <button
+          onClick={() => logoutMutation.mutate()}
+          disabled={logoutMutation.isPending}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all disabled:opacity-50"
+        >
+          <LogOut className="w-4 h-4 flex-shrink-0" />
+          <span>{logoutMutation.isPending ? 'Saindo...' : 'Sair'}</span>
+        </button>
       </div>
     </aside>
   );

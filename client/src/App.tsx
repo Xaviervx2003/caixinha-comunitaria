@@ -1,25 +1,19 @@
 // client/src/App.tsx
 import React from "react";
-import { Route, Switch, Redirect } from "wouter";
+import { Route, Switch } from "wouter";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react"; // Adicionado para um visual mais profissional
+import { Loader2 } from "lucide-react";
 
-// Configurações e Contextos
 import { trpc, trpcClient, queryClient } from "@/lib/trpc";
 import { ThemeProvider } from "@/contexts/ThemeContext";
-
-// Componentes UI e Layout
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
-// Páginas
 import Home from "@/pages/Home";
 import NotFound from "@/pages/NotFound";
 
-// ─────────────────────────────────────────
-// Guardião de Rotas — Protege contra acessos não autorizados
-// ─────────────────────────────────────────
+// ── Guardião de Rotas ─────────────────────────────────────────
 const ProtectedRoute = ({ component: Component }: { component: React.ComponentType<any> }) => {
   const { data: user, isLoading } = trpc.auth.me.useQuery();
 
@@ -34,33 +28,24 @@ const ProtectedRoute = ({ component: Component }: { component: React.ComponentTy
     );
   }
 
-  // TODO: Quando o sistema de Login estiver criado, alterar a rota de redirecionamento de "/404" para "/login"
-  if (!user) return <Redirect to="/404" />;
-
+  // Home.tsx já gerencia o estado de login internamente
   return <Component />;
 };
 
-// ─────────────────────────────────────────
-// Roteamento
-// ─────────────────────────────────────────
+// ── Roteamento ────────────────────────────────────────────────
 function Router() {
   return (
     <Switch>
       <Route path="/">
         {() => <ProtectedRoute component={Home} />}
       </Route>
-
       <Route path="/404" component={NotFound} />
-
-      {/* Fallback (apanha todas as rotas que não existem) */}
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-// ─────────────────────────────────────────
-// Aplicação Raiz (Injeção de Providers)
-// ─────────────────────────────────────────
+// ── Aplicação Raiz ────────────────────────────────────────────
 export default function App() {
   return (
     <ErrorBoundary>
@@ -68,9 +53,7 @@ export default function App() {
         <QueryClientProvider client={queryClient}>
           <ThemeProvider defaultTheme="light">
             <TooltipProvider>
-              {/* O Router renderiza as páginas */}
               <Router />
-              {/* O Toaster fica no fim para garantir que aparece sempre por cima de tudo */}
               <Toaster position="top-right" richColors />
             </TooltipProvider>
           </ThemeProvider>

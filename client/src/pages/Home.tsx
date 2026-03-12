@@ -10,9 +10,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Plus, PiggyBank, AlertTriangle, LayoutDashboard, Users,
-  ArrowLeftRight, Settings, X, LogOut, RotateCcw, Download, Upload,
+  ArrowLeftRight, Settings, RotateCcw, Download, Upload,
 } from 'lucide-react';
-import { getLoginUrl } from '@/const';
 import { OfflineIndicator } from '@/components/OfflineIndicator';
 import { useLocalCache } from '@/hooks/use-local-cache';
 import { exportToCSV } from '@/lib/csv-export';
@@ -43,6 +42,16 @@ export default function Home() {
   const [activeSection, setActiveSection] = useState<NavSection>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // ── Estados de Login ────────────────────────────────────────
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
+  const loginMutation = trpc.auth.login.useMutation({
+    onSuccess: () => utils.auth.me.invalidate(),
+    onError: (e) => setLoginError(e.message),
+  });
+
+  // ── Queries ─────────────────────────────────────────────────
   const { data: participants = [], isLoading } = trpc.caixinha.listParticipants.useQuery(undefined, { enabled: isAuthenticated }) as { data: Participant[]; isLoading: boolean };
   const { data: allTransactions = [] } = trpc.caixinha.getAllTransactions.useQuery(undefined, { enabled: isAuthenticated }) as { data: Transaction[] };
   const { data: auditLogEntries = [] } = trpc.caixinha.getAuditLog.useQuery({ limit: 50 }, { enabled: isAuthenticated }) as { data: AuditEntry[] };
@@ -65,6 +74,7 @@ export default function Home() {
     utils.caixinha.getNextMonthEstimate.invalidate();
   };
 
+  // ── Mutations ───────────────────────────────────────────────
   const addParticipantMutation = trpc.caixinha.addParticipant.useMutation({ onSuccess: invalidateAll });
   const addLoanMutation = trpc.caixinha.addLoan.useMutation({ onSuccess: invalidateAll });
   const paymentMutation = trpc.caixinha.registerPayment.useMutation({ onSuccess: invalidateAll, onError: (e) => showErrorToast(e.message) });
@@ -77,6 +87,7 @@ export default function Home() {
   const deleteParticipantMutation = trpc.caixinha.deleteParticipant.useMutation({ onSuccess: invalidateAll });
   const updateSettingsMutation = trpc.caixinha.updateCaixinhaSettings.useMutation({ onSuccess: () => showSuccessToast('Configurações salvas!') });
 
+  // ── Estados dos Modais ──────────────────────────────────────
   const [isAddParticipantOpen, setIsAddParticipantOpen] = useState(false);
   const [isAddLoanOpen, setIsAddLoanOpen] = useState(false);
   const [isAmortizeOpen, setIsAmortizeOpen] = useState(false);
@@ -93,6 +104,7 @@ export default function Home() {
   const [isEstimateExpanded, setIsEstimateExpanded] = useState(false);
   const [chartParticipantId, setChartParticipantId] = useState<number | null>(null);
 
+  // ── Estados dos Formulários ─────────────────────────────────
   const [newParticipantName, setNewParticipantName] = useState('');
   const [newParticipantEmail, setNewParticipantEmail] = useState('');
   const [newParticipantLoan, setNewParticipantLoan] = useState('');
@@ -120,6 +132,7 @@ export default function Home() {
   const totalInterest = totalPaymentAmount - paymentCount * MONTHLY_FEE;
   const totalDebts = participants.reduce((acc, p) => acc + parseFloat(p.currentDebt.toString()), 0);
 
+  // ── Handlers ────────────────────────────────────────────────
   const handleAddParticipant = async () => {
     if (!newParticipantName.trim()) { showErrorToast('Nome obrigatório'); return; }
     try { await getOrCreateCaixinhaMutation.mutateAsync(); } catch { showErrorToast('Erro ao inicializar caixinha'); return; }
@@ -129,12 +142,14 @@ export default function Home() {
       showSuccessToast(`${newParticipantName} adicionado!`);
     } catch { showErrorToast('Erro ao adicionar participante'); }
   };
+
   const handleAddLoan = async () => {
     if (!selectedParticipantId || !loanAmount) return;
     const amount = parseFloat(loanAmount);
     if (isNaN(amount) || amount <= 0) { showErrorToast('Valor inválido'); return; }
     try { await addLoanMutation.mutateAsync({ participantId: selectedParticipantId, amount }); setIsAddLoanOpen(false); setLoanAmount(''); showSuccessToast(`Empréstimo de ${formatCurrency(amount)} registrado!`); } catch { showErrorToast('Erro'); }
   };
+
   const handlePayment = async () => {
     if (!selectedParticipantId) return;
     try {
@@ -143,6 +158,7 @@ export default function Home() {
       showSuccessToast(`Pagamento registrado!`);
     } catch { showErrorToast('Erro ao registrar pagamento'); }
   };
+
   const handleAmortize = async () => {
     if (!selectedParticipantId || !amortizeAmount) return;
     const amount = parseFloat(amortizeAmount);
@@ -151,6 +167,7 @@ export default function Home() {
     if (amount > currentDebt) { showErrorToast('Valor maior que a dívida atual.'); return; }
     try { await amortizeMutation.mutateAsync({ participantId: selectedParticipantId, amount }); setIsAmortizeOpen(false); setAmortizeAmount(''); showSuccessToast(`Amortização registrada!`); } catch { showErrorToast('Erro'); }
   };
+
   const handleResetMonth = async () => {
     try {
       const now = new Date();
@@ -159,34 +176,41 @@ export default function Home() {
       setIsResetConfirmOpen(false); showSuccessToast('Mês resetado!');
     } catch { showErrorToast('Erro ao resetar mês'); }
   };
+
   const handleEditLoan = async () => {
     if (!selectedParticipantId || !editLoanAmount) return;
     const amount = parseFloat(editLoanAmount);
     if (isNaN(amount) || amount < 0) { showErrorToast('Valor inválido'); return; }
     try { await updateLoanMutation.mutateAsync({ participantId: selectedParticipantId, newTotalLoan: amount }); setIsEditLoanOpen(false); setEditLoanAmount(''); showSuccessToast('Atualizado!'); } catch { showErrorToast('Erro'); }
   };
+
   const handleEditDebt = async () => {
     if (!selectedParticipantId || !editDebtAmount) return;
     const amount = parseFloat(editDebtAmount);
     if (isNaN(amount) || amount < 0) { showErrorToast('Valor inválido'); return; }
     try { await updateDebtMutation.mutateAsync({ participantId: selectedParticipantId, newCurrentDebt: amount }); setIsEditDebtOpen(false); setEditDebtAmount(''); showSuccessToast('Atualizado!'); } catch { showErrorToast('Erro'); }
   };
+
   const handleEditName = async () => {
     if (!selectedParticipantId || !editNameValue) return;
     try { await updateNameMutation.mutateAsync({ participantId: selectedParticipantId, newName: editNameValue }); setIsEditNameOpen(false); setEditNameValue(''); showSuccessToast('Nome atualizado!'); } catch { showErrorToast('Erro'); }
   };
+
   const handleEditEmail = async () => {
     if (!selectedParticipantId) return;
     try { await updateEmailMutation.mutateAsync({ participantId: selectedParticipantId, email: editEmailValue || undefined }); setIsEditEmailOpen(false); setEditEmailValue(''); showSuccessToast('Email atualizado!'); } catch { showErrorToast('Erro'); }
   };
+
   const handleDeleteParticipant = async () => {
     if (!selectedParticipantId) return;
     try { await deleteParticipantMutation.mutateAsync({ participantId: selectedParticipantId }); setIsDeleteConfirmOpen(false); setSelectedParticipantId(null); showSuccessToast('Participante deletado!'); } catch { showErrorToast('Erro'); }
   };
+
   const handleImportCSV = async (importedParticipants: ImportedParticipant[], _: ImportedTransaction[]) => {
     try { for (const p of importedParticipants) await addParticipantMutation.mutateAsync({ name: p.name, totalLoan: p.totalLoan }); }
     catch { showErrorToast('Erro ao importar'); throw new Error('Import failed'); }
   };
+
   const handleSaveSettings = async () => {
     const day = parseInt(settingsDueDay);
     if (isNaN(day) || day < 1 || day > 28) { showErrorToast('Dia inválido (1-28)'); return; }
@@ -198,11 +222,13 @@ export default function Home() {
     } catch { showErrorToast('Erro ao salvar configurações'); }
   };
 
+  // ── TELA DE LOGIN ───────────────────────────────────────────
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-[#0A0A0A] flex items-center justify-center">
-        <div className="text-center">
-          <div className="flex items-center justify-center gap-3 mb-8">
+      <div className="min-h-screen bg-[#0A0A0A] flex items-center justify-center p-4">
+        <div className="w-full max-w-sm">
+          {/* Logo */}
+          <div className="flex items-center justify-center gap-3 mb-10">
             <div className="bg-[#00C853] p-3 rounded-xl">
               <PiggyBank className="w-10 h-10 text-white" />
             </div>
@@ -211,11 +237,48 @@ export default function Home() {
               <p className="text-[#00C853] text-sm font-bold uppercase tracking-widest">Comunitária</p>
             </div>
           </div>
-          <p className="text-gray-400 mb-8">Faça login para acessar sua caixinha</p>
-          <button onClick={() => window.location.href = getLoginUrl()}
-            className="bg-[#00C853] text-white px-8 py-3 font-bold rounded-lg hover:bg-[#00a844] transition-colors">
-            Fazer Login
-          </button>
+
+          {/* Card de Login */}
+          <div className="bg-[#1A1A1A] border border-white/10 rounded-2xl p-8 space-y-5">
+            <div>
+              <h2 className="text-white font-black text-xl mb-1">Acesso Restrito</h2>
+              <p className="text-gray-400 text-sm">Digite o código de acesso para continuar</p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase text-gray-400 block">
+                Código de Acesso
+              </label>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(e) => { setLoginPassword(e.target.value); setLoginError(''); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && loginPassword) {
+                    loginMutation.mutate({ password: loginPassword });
+                  }
+                }}
+                placeholder="••••••••"
+                autoFocus
+                className="w-full bg-[#0A0A0A] border-2 border-white/10 rounded-xl px-4 py-3 text-white font-medium focus:outline-none focus:border-[#00C853] transition-colors"
+              />
+              {loginError && (
+                <p className="text-[#FF3D00] text-xs font-bold mt-1">{loginError}</p>
+              )}
+            </div>
+
+            <button
+              onClick={() => loginMutation.mutate({ password: loginPassword })}
+              disabled={loginMutation.isPending || !loginPassword}
+              className="w-full bg-[#00C853] text-white py-3 rounded-xl font-bold hover:bg-[#00a844] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loginMutation.isPending ? 'Verificando...' : 'Entrar'}
+            </button>
+          </div>
+
+          <p className="text-center text-gray-600 text-xs mt-6">
+            Senha padrão: <span className="text-gray-400 font-mono">admin123</span>
+          </p>
         </div>
       </div>
     );
@@ -223,11 +286,11 @@ export default function Home() {
 
   const debtors = participants.filter(p => parseFloat(p.currentDebt.toString()) > 0).length;
 
+  // ── TELA PRINCIPAL ──────────────────────────────────────────
   return (
     <div className="flex h-screen bg-[#F4F5F7] overflow-hidden">
       <OfflineIndicator />
 
-      {/* Overlay mobile */}
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/60 z-20 lg:hidden" onClick={() => setSidebarOpen(false)} />
       )}
@@ -244,9 +307,7 @@ export default function Home() {
         }}
       />
 
-      {/* ── CONTEÚDO PRINCIPAL ──────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-
         <HomeTopbar
           activeSection={activeSection}
           activeSectionLabel={NAV_ITEMS.find((n) => n.id === activeSection)?.label || 'Dashboard'}
@@ -254,8 +315,9 @@ export default function Home() {
           onOpenAddParticipant={() => setIsAddParticipantOpen(true)}
         />
 
-        {/* Scrollable content */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+
+          {/* ── DASHBOARD ──────────────────────────────────────── */}
           {activeSection === 'dashboard' && (
             <DashboardSection
               totalFees={totalFees}
@@ -272,7 +334,7 @@ export default function Home() {
             />
           )}
 
-          {/* ── PARTICIPANTES ──────────────────────────────────────── */}
+          {/* ── PARTICIPANTES ──────────────────────────────────── */}
           {activeSection === 'participantes' && (
             <div className="max-w-7xl mx-auto">
               {isLoading ? (
@@ -317,7 +379,7 @@ export default function Home() {
             </div>
           )}
 
-          {/* ── DEVEDORES ──────────────────────────────────────────── */}
+          {/* ── DEVEDORES ──────────────────────────────────────── */}
           {activeSection === 'devedores' && (
             <div className="max-w-4xl mx-auto">
               <DebtorsList debtors={participants.map((p) => ({
@@ -329,7 +391,7 @@ export default function Home() {
             </div>
           )}
 
-          {/* ── TRANSAÇÕES ─────────────────────────────────────────── */}
+          {/* ── TRANSAÇÕES ─────────────────────────────────────── */}
           {activeSection === 'transacoes' && (
             <div className="max-w-4xl mx-auto space-y-6">
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -396,37 +458,25 @@ export default function Home() {
             </div>
           )}
 
-          {/* ── CONFIGURAÇÕES ──────────────────────────────────────── */}
+          {/* ── CONFIGURAÇÕES ──────────────────────────────────── */}
           {activeSection === 'configuracoes' && (
             <div className="max-w-2xl mx-auto space-y-6">
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
                 <h2 className="font-black text-gray-900 mb-1">Configurações da Caixinha</h2>
                 <p className="text-sm text-gray-500 mb-6">Personalize as regras da sua caixinha</p>
-
                 <div className="space-y-5">
                   <div>
                     <label className="block text-sm font-bold text-gray-700 mb-2">Nome da Caixinha</label>
-                    <input
-                      type="text"
-                      value={settingsName}
-                      onChange={(e) => setSettingsName(e.target.value)}
+                    <input type="text" value={settingsName} onChange={(e) => setSettingsName(e.target.value)}
                       placeholder="Ex: Caixinha do Trabalho"
-                      className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:border-[#00C853] transition-colors"
-                    />
+                      className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:border-[#00C853] transition-colors" />
                   </div>
-
                   <div>
                     <label className="block text-sm font-bold text-gray-700 mb-2">Dia de Vencimento</label>
-                    <input
-                      type="number"
-                      value={settingsDueDay}
-                      onChange={(e) => setSettingsDueDay(e.target.value)}
-                      min={1} max={28}
-                      className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:border-[#00C853] transition-colors"
-                    />
+                    <input type="number" value={settingsDueDay} onChange={(e) => setSettingsDueDay(e.target.value)} min={1} max={28}
+                      className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:border-[#00C853] transition-colors" />
                     <p className="text-xs text-gray-400 mt-1.5">Dia do mês seguinte em que o pagamento vence. Padrão: 5.</p>
                   </div>
-
                   <div className="pt-2">
                     <button onClick={handleSaveSettings} disabled={updateSettingsMutation.isPending}
                       className="w-full bg-[#00C853] text-white py-3 rounded-lg font-bold hover:bg-[#00a844] transition-colors disabled:opacity-50">
@@ -458,8 +508,7 @@ export default function Home() {
                       );
                       showSuccessToast('Backup exportado!');
                     } catch { showErrorToast('Erro'); }
-                  }}
-                    className="flex items-center gap-2 bg-blue-50 text-blue-600 border border-blue-200 px-4 py-2 rounded-lg font-bold text-sm hover:bg-blue-100 transition-colors">
+                  }} className="flex items-center gap-2 bg-blue-50 text-blue-600 border border-blue-200 px-4 py-2 rounded-lg font-bold text-sm hover:bg-blue-100 transition-colors">
                     <Download className="w-4 h-4" /> Exportar CSV
                   </button>
                   <button onClick={() => setIsImportOpen(true)}
@@ -470,11 +519,10 @@ export default function Home() {
               </div>
             </div>
           )}
-
         </main>
       </div>
 
-      {/* ── MODALS ─────────────────────────────────────────────────── */}
+      {/* ── MODAIS ─────────────────────────────────────────────── */}
       <Dialog open={isAddParticipantOpen} onOpenChange={setIsAddParticipantOpen}>
         <DialogContent className="bg-white rounded-xl border-0 shadow-2xl w-full sm:max-w-[425px]">
           <DialogHeader>

@@ -1,13 +1,22 @@
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { CheckCircle2, AlertCircle, XCircle, TrendingDown, Wallet, History, Check, ChevronLeft, ChevronRight, Edit2, AtSign, DollarSign, User, Trash2, CalendarDays } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { formatCurrency } from '@/lib/format-currency';
 import { useState } from 'react';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 import { showSuccessToast, showErrorToast } from '@/lib/toast-utils';
+
+// Importando a Fonte da Verdade partilhada com o Backend!
+import { 
+  calculateProgress, 
+  calculateMonthlyInterest, 
+  calculateMonthlyTotal, 
+  isLatePayment, 
+  calcLatePaymentFee 
+} from '@/lib/finance';
 
 interface ParticipantCardProps {
   participant: any;
@@ -105,11 +114,12 @@ export function ParticipantCard({
 
   const handleConfirmPay = async () => {
     if (!monthToPay) return;
+    
+    // O TypeScript agora ficará feliz, pois removemos o paymentDate que não existia no schema do backend
     await paymentMutation.mutateAsync({
       participantId: participant.id,
       month: `${monthToPay.year}-${monthToPay.monthValue}`,
       year: monthToPay.year,
-      paymentDate: paymentDate,
     });
   };
 
@@ -122,7 +132,16 @@ export function ParticipantCard({
   const StatusIcon = { green: CheckCircle2, yellow: AlertCircle, red: XCircle }[status];
 
   const baseMonthlyTotal = calculateMonthlyTotal(participant.currentDebt);
-  const modalPenalty = calculatePenalty(paymentDate);
+  
+  // Lógica dinâmica de Multa conectada à Fonte da Verdade
+  let modalPenalty = 0;
+  if (monthToPay && paymentDate) {
+    const isLate = isLatePayment(`${monthToPay.year}-${monthToPay.monthValue}`, new Date(paymentDate));
+    if (isLate) {
+      modalPenalty = calcLatePaymentFee().totalLateCharge.toNumber();
+    }
+  }
+  
   const modalTotal = baseMonthlyTotal + modalPenalty;
 
   return (
@@ -297,9 +316,13 @@ export function ParticipantCard({
               <div className="flex justify-between items-end">
                 <div className="flex flex-col">
                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Total a Pagar</span>
-                  <span className="text-xs font-bold text-gray-600 uppercase tracking-tight">R$ 200,00 + {formatCurrency(calculateMonthlyInterest(participant.currentDebt))} (juros)</span>
+                  <span className="text-xs font-bold text-gray-600 uppercase tracking-tight">
+                    R$ 200,00 + {formatCurrency(calculateMonthlyInterest(participant.currentDebt))} (juros)
+                  </span>
                   {modalPenalty > 0 && (
-                    <span className="text-xs font-black text-red-600 mt-1 uppercase tracking-tight animate-in fade-in">+ R$ 20,00 (Multa)</span>
+                    <span className="text-xs font-black text-red-600 mt-1 uppercase tracking-tight animate-in fade-in">
+                      + {formatCurrency(modalPenalty)} (Multa + Mora)
+                    </span>
                   )}
                 </div>
                 <span className="text-3xl font-black text-emerald-600 tracking-tighter">{formatCurrency(modalTotal)}</span>
@@ -319,30 +342,10 @@ export function ParticipantCard({
   );
 }
 
+// Apenas esta função local permaneceu, porque lida com UI (Status) e não com matemática financeira!
 function getParticipantStatus(participant: any): 'green' | 'yellow' | 'red' {
   const debt = parseFloat(participant.currentDebt);
   if (debt === 0) return 'green';
   if (participant.interestPaid) return 'yellow';
   return 'red';
-}
-function calculateProgress(totalLoan: any, currentDebt: any): number {
-  const total = parseFloat(totalLoan);
-  const current = parseFloat(currentDebt);
-  if (total === 0) return 0;
-  return Math.round(((total - current) / total) * 100);
-}
-function calculateMonthlyInterest(currentDebt: any): number {
-  return parseFloat(currentDebt) * 0.10;
-}
-function calculateMonthlyTotal(currentDebt: any): number {
-  return 200 + calculateMonthlyInterest(currentDebt);
-}
-function calculatePenalty(paymentDateStr?: string): number {
-  if (!paymentDateStr) return 0;
-  const parts = paymentDateStr.split('-');
-  if (parts.length === 3) {
-    const day = parseInt(parts[2], 10);
-    if (day > 5) return 20;
-  }
-  return 0;
 }

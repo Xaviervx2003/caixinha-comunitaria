@@ -10,16 +10,21 @@ export type TrpcContext = {
 export async function createContext(
   opts: CreateExpressContextOptions
 ): Promise<TrpcContext> {
-  // Criamos o seu passe livre definitivo direto no servidor!
-  const mockUser = {
+  const mockUser: User = {
     id: 1,
-    name: "João Victor",
-    email: "joao@caixinha.local",
-  } as unknown as User;
+    openId: "mock-user-local",
+    name: "Dev User",
+    email: "dev@local.com",
+    loginMethod: "mock",
+    role: "user",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lastSignedIn: new Date(),
+  };
 
   return {
     req: opts.req,
     res: opts.res,
-    user: mockUser, // O servidor agora sempre vai ver você logado
+    user: mockUser,
   };
 }
