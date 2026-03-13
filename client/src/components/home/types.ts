@@ -6,13 +6,13 @@ export type Participant = {
   currentDebt: number | string;
   monthlyPayments?: { id: number; month: string; year: number; paid: boolean | number }[];
   createdAt?: string | Date | null;
-  role?: 'member' | 'external'; // 🟢 CORREÇÃO: O TypeScript agora conhece a propriedade "role"
+  role?: 'member' | 'external';
 };
 
 export type Transaction = {
   id: number;
   participantId: number;
-  type: 'payment' | 'amortization' | 'loan' | 'reversal' | string; // 🟢 Adicionados os tipos de transação completos
+  type: 'payment' | 'amortization' | 'loan' | 'reversal' | string;
   amount: number | string;
   month?: string;
   year?: number;
@@ -29,7 +29,15 @@ export type AuditEntry = {
   createdAt?: string | Date | null;
 };
 
-export type NavSection = 'dashboard' | 'participantes' | 'devedores' | 'transacoes' | 'configuracoes';
+// ✅ Novas seções adicionadas
+export type NavSection =
+  | 'dashboard'
+  | 'participantes'
+  | 'devedores'
+  | 'historico'
+  | 'lucros'
+  | 'transacoes'
+  | 'configuracoes';
 
 export const MONTHS = [
   { value: '01', label: 'Janeiro' },

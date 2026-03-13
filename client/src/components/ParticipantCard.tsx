@@ -17,7 +17,6 @@ import {
   calcLatePaymentFee 
 } from '@/lib/finance';
 
-// 🌟 DICA 6: CRIANDO INTERFACES RÍGIDAS
 export interface MonthlyPaymentRecord {
   id: number;
   month: string;
@@ -33,11 +32,11 @@ export interface AppParticipant {
   currentDebt: string | number;
   monthlyPayments?: MonthlyPaymentRecord[];
   interestPaid?: boolean;
-  role?: 'member' | 'external'; // 🟢 NOVO: Agora o cartão sabe quem é Membro e quem é Externo
+  role?: 'member' | 'external';
 }
 
 interface ParticipantCardProps {
-  participant: AppParticipant; // ADEUS 'any'! O TypeScript agora protege esta variável.
+  participant: AppParticipant;
   onPayment?: () => void;
   onAmortize?: () => void;
   onAddLoan?: () => void;
@@ -83,6 +82,7 @@ export function ParticipantCard({
   const [monthToPay, setMonthToPay] = useState<{ monthValue: string; year: number; label: string } | null>(null);
   
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [quotaMultiplier, setQuotaMultiplier] = useState(1);
 
   const utils = trpc.useUtils();
 
@@ -102,12 +102,12 @@ export function ParticipantCard({
       utils.caixinha.getAllTransactions.invalidate();
       utils.caixinha.getBalancete.invalidate();
       setIsPayMonthOpen(false);
+      setQuotaMultiplier(1);
       showSuccessToast('PAGAMENTO REGISTRADO!');
     },
     onError: (error) => showErrorToast(error.message),
   });
 
-  // Tipagem forte também nos métodos internos
   const getPaidRecord = (monthValue: string, year: number) => {
     return monthlyPayments.find((p: MonthlyPaymentRecord) => p.month === `${year}-${monthValue}` && p.year === year && (p.paid === true || p.paid === 1));
   };
@@ -120,6 +120,7 @@ export function ParticipantCard({
     } else {
       setMonthToPay({ monthValue, year, label });
       setPaymentDate(new Date().toISOString().split('T')[0]);
+      setQuotaMultiplier(1);
       setIsPayMonthOpen(true);
     }
   };
@@ -133,12 +134,12 @@ export function ParticipantCard({
 
   const handleConfirmPay = async () => {
     if (!monthToPay) return;
-    
     await paymentMutation.mutateAsync({
       participantId: participant.id,
       month: `${monthToPay.year}-${monthToPay.monthValue}`,
       year: monthToPay.year,
       paymentDate: paymentDate,
+      quotaMultiplier,
     });
   };
 
@@ -150,13 +151,11 @@ export function ParticipantCard({
   const statusText = { green: 'EM DIA', yellow: 'JUROS PAGOS', red: 'PENDENTE' };
   const StatusIcon = { green: CheckCircle2, yellow: AlertCircle, red: XCircle }[status];
 
-  // 🟢 INJETA O ROLE NA MATEMÁTICA DO FRONTEND
   const userRole = participant.role || 'member';
   const baseMonthlyTotal = calculateMonthlyTotal(participant.currentDebt, userRole);
   
   const totalAmortizado = Math.max(0, parseFloat(participant.totalLoan as string || '0') - parseFloat(participant.currentDebt as string || '0'));
   const paidMonthsCount = monthlyPayments.filter((p: MonthlyPaymentRecord) => p.paid === true || p.paid === 1).length;
-  // O Total Pago também isenta os 200 do histórico se for externo
   const totalPagoAproximado = totalAmortizado + (paidMonthsCount * (userRole === 'external' ? 0 : 200));
   
   let modalPenalty = 0;
@@ -166,19 +165,18 @@ export function ParticipantCard({
       modalPenalty = calcLatePaymentFee(userRole).totalLateCharge.toNumber();
     }
   }
-  const modalTotal = baseMonthlyTotal + modalPenalty;
+  // Juros fixos sobre dívida; cota multiplica pelo quotaMultiplier
+  const modalTotal = calculateMonthlyTotal(participant.currentDebt, userRole, quotaMultiplier) + modalPenalty;
 
   return (
     <div className="bg-white border-2 border-slate-200 shadow-sm rounded-xl p-5 flex flex-col gap-5 hover:border-slate-300 transition-colors relative">
       
-      {/* ETIQUETA VISUAL DE EXTERNO */}
       {userRole === 'external' && (
         <span className="absolute -top-3 -right-2 bg-blue-100 text-blue-700 border-2 border-blue-200 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm">
           Tomador Externo
         </span>
       )}
 
-      {/* HEADER */}
       <div className="flex justify-between items-start gap-3 cursor-pointer group mt-1" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center shrink-0 border-2 border-slate-200">
@@ -196,7 +194,6 @@ export function ParticipantCard({
         </Badge>
       </div>
 
-      {/* DÍVIDA E TOTAL PAGO */}
       <div className="bg-slate-50 border-2 border-slate-200 rounded-lg p-4 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex justify-between items-center mb-1">
           <span className="text-xs font-bold text-gray-600 uppercase tracking-widest">Saldo Devedor</span>
@@ -225,7 +222,6 @@ export function ParticipantCard({
         )}
       </div>
 
-      {/* EXPANDIDO */}
       {isExpanded && (
         <div className="space-y-6 pt-2 border-t-2 border-slate-100 animate-in fade-in duration-200">
           
@@ -306,7 +302,6 @@ export function ParticipantCard({
         </div>
       )}
 
-      {/* MODAL DE DESMARCAR */}
       <ConfirmationModal
         isOpen={isUnmarkConfirmOpen}
         title="ESTORNAR PAGAMENTO"
@@ -336,6 +331,38 @@ export function ParticipantCard({
                   {monthToPay.label}/{monthToPay.year}
                 </span>
               </div>
+
+              {/* SELETOR DE COTAS - apenas membros */}
+              {userRole !== 'external' && (
+                <div className="flex flex-col gap-2">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                    Quantas cotas pagar?
+                  </label>
+                  <div className="flex gap-1.5">
+                    {[1, 2, 3, 4, 5, 6].map(n => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setQuotaMultiplier(n)}
+                        className={`flex-1 h-9 text-xs font-black rounded-md border-2 transition-all ${
+                          quotaMultiplier === n
+                            ? 'bg-black text-white border-black'
+                            : 'bg-white text-black border-slate-300 hover:border-black'
+                        }`}
+                      >
+                        {n}x
+                      </button>
+                    ))}
+                  </div>
+                  {quotaMultiplier > 1 && (
+                    <p className="text-[10px] text-blue-600 font-bold uppercase tracking-wider">
+                      💡 Juros inalterados — só a cota se multiplica
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="h-0.5 bg-slate-200 w-full" />
               
               <div className="flex flex-col gap-2">
                 <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-1">
@@ -349,20 +376,22 @@ export function ParticipantCard({
                 />
               </div>
 
-              <div className="h-0.5 bg-slate-200 w-full my-1"></div>
+              <div className="h-0.5 bg-slate-200 w-full" />
               
               <div className="flex justify-between items-end">
                 <div className="flex flex-col">
                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Total a Pagar</span>
                   
-                  {/* 🟢 O TEXTO MUDA SE FOR EXTERNO */}
                   {userRole === 'external' ? (
                     <span className="text-xs font-bold text-gray-600 uppercase tracking-tight">
-                      Apenas Juros: R$ {formatCurrency(calculateMonthlyInterest(participant.currentDebt, userRole))}
+                      Apenas Juros: {formatCurrency(calculateMonthlyInterest(participant.currentDebt, userRole))}
                     </span>
                   ) : (
                     <span className="text-xs font-bold text-gray-600 uppercase tracking-tight">
-                      R$ 200,00 + {formatCurrency(calculateMonthlyInterest(participant.currentDebt, userRole))} (juros)
+                      {quotaMultiplier > 1
+                        ? `${quotaMultiplier}x R$ 200,00 = R$ ${(200 * quotaMultiplier).toFixed(2).replace('.', ',')} + ${formatCurrency(calculateMonthlyInterest(participant.currentDebt, userRole))} (juros)`
+                        : `R$ 200,00 + ${formatCurrency(calculateMonthlyInterest(participant.currentDebt, userRole))} (juros)`
+                      }
                     </span>
                   )}
                   
@@ -389,7 +418,6 @@ export function ParticipantCard({
   );
 }
 
-// A função local agora usa a nova Interface AppParticipant
 function getParticipantStatus(participant: AppParticipant): 'green' | 'yellow' | 'red' {
   const debt = parseFloat(participant.currentDebt as string);
   if (debt === 0) return 'green';
