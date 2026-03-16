@@ -17,8 +17,8 @@ const authRouter = router({
   login: publicProcedure
     .input(z.object({ password: z.string() }))
     .mutation(({ input, ctx }) => {
-      // A senha oficial busca do .env. Se não tiver lá, usa 'admin123'
-      const correctPassword = process.env.APP_SECRET_PASSWORD || 'admin123';
+      // A senha oficial busca do .env
+      const correctPassword = process.env.APP_SECRET_PASSWORD || 'caixinha-secreta-prod';
       
       if (input.password !== correctPassword) {
         throw new TRPCError({ 

@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import net from "net";
+import cookieParser from "cookie-parser";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 
 // Já não precisamos do OAuth!
@@ -35,6 +36,7 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  app.use(cookieParser());
 
   // tRPC API - A Nossa Única Porta de Entrada (Protegida pela Senha Mestra!)
   app.use(

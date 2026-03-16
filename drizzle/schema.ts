@@ -178,8 +178,7 @@ export const auditLog = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     participantId: int("participantId")
-      .notNull()
-      .references(() => participants.id, { onDelete: "restrict" }),
+      .references(() => participants.id, { onDelete: "set null" }),
     participantName: varchar("participantName", { length: 255 }).notNull(),
     action: mysqlEnum("action", [
       "payment_marked",

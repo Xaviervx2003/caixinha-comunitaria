@@ -10,13 +10,16 @@ export type TrpcContext = {
 export async function createContext(
   opts: CreateExpressContextOptions
 ): Promise<TrpcContext> {
+  const cookies = opts.req.headers.cookie || '';
+  const isAuthenticated = cookies.includes('auth_token=caixinha_autenticada_2026');
+
   const mockUser: User = {
     id: 1,
     openId: "mock-user-local",
-    name: "Dev User",
-    email: "dev@local.com",
+    name: "Admin",
+    email: "admin@local.com",
     loginMethod: "mock",
-    role: "user",
+    role: "admin", // Must be admin so they have full access in development/production as currently intended
     createdAt: new Date(),
     updatedAt: new Date(),
     lastSignedIn: new Date(),
@@ -25,6 +28,6 @@ export async function createContext(
   return {
     req: opts.req,
     res: opts.res,
-    user: mockUser,
+    user: isAuthenticated ? mockUser : null,
   };
 }

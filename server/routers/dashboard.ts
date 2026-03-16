@@ -10,7 +10,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 
 export const dashboardProcedures = {
-  getOrCreateCaixinha: protectedProcedure.mutation(async ({ ctx }) => {
+  getOrCreateCaixinha: protectedProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const [existing] = await db.select().from(caixinhaMetadata).where(eq(caixinhaMetadata.ownerId, ctx.user.id)).limit(1);
     if (existing) return existing;
@@ -74,7 +74,7 @@ export const dashboardProcedures = {
       ));
 
     const paidIds = new Set(paidRows.map((row) => row.participantId));
-    const activeParticipants = allParticipants.filter((p) => (p.isActive as any) === true || (p.isActive as any) === 1);
+    const activeParticipants = allParticipants.filter((p) => p.isActive === true || p.isActive === 1 || p.isActive as unknown === true);
     const activeMembers = activeParticipants.filter((p) => p.role !== 'external');
     const activeExternalWithDebt = activeParticipants.filter((p) => p.role === 'external' && new Decimal(p.currentDebt).gt(0));
 
@@ -107,7 +107,7 @@ export const dashboardProcedures = {
         role: participants.role,
       })
       .from(participants)
-      .where(eq(participants.caixinhaId, caixinha.id));
+      .where(and(eq(participants.caixinhaId, caixinha.id), eq(participants.isActive as any, true)));
 
     const estimate = calcNextMonthEstimate(activeParticipants);
     const now = new Date();
@@ -267,7 +267,7 @@ export const dashboardProcedures = {
       const activeParticipants = await db
         .select({ id: participants.id, name: participants.name, role: participants.role, currentDebt: participants.currentDebt })
         .from(participants)
-        .where(and(eq(participants.caixinhaId, caixinha.id), eq(participants.isActive as any, true)));
+        .where(and(eq(participants.caixinhaId, caixinha.id), eq(participants.isActive, true)));
 
       const payments = await db
         .select({ participantId: monthlyPayments.participantId })
@@ -307,7 +307,7 @@ export const dashboardProcedures = {
       const rows = await db
         .select({ id: participants.id, role: participants.role, currentDebt: participants.currentDebt })
         .from(participants)
-        .where(and(eq(participants.caixinhaId, caixinha.id), eq(participants.isActive as any, true)));
+        .where(and(eq(participants.caixinhaId, caixinha.id), eq(participants.isActive, true)));
 
       let quotas = 0;
       let interests = 0;
@@ -343,7 +343,7 @@ export const dashboardProcedures = {
         .from(participants)
         .where(and(
           eq(participants.caixinhaId, caixinha.id),
-          eq(participants.isActive as any, true)
+          eq(participants.isActive, true)
         ));
 
       if (allParticipants.length === 0) {

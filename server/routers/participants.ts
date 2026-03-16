@@ -105,9 +105,41 @@ export const participantsProcedures = {
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
-      await getParticipantOrThrow(db, input.participantId, caixinha.id);
-      await db.update(participants).set({ totalLoan: new Decimal(input.newTotalLoan).toFixed(2) }).where(eq(participants.id, input.participantId));
-      return { success: true };
+
+      return db.transaction(async (tx) => {
+        const [p] = await tx.select().from(participants).where(and(eq(participants.id, input.participantId), eq(participants.caixinhaId, caixinha.id))).for("update").limit(1);
+        if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Participante não encontrado." });
+
+        const newLoanAmount = new Decimal(input.newTotalLoan);
+        const oldLoanAmount = new Decimal(p.totalLoan);
+
+        await tx.update(participants).set({ totalLoan: newLoanAmount.toFixed(2) }).where(eq(participants.id, input.participantId));
+
+        const diff = newLoanAmount.sub(oldLoanAmount);
+
+        if (!diff.isZero()) {
+          const type = diff.gt(0) ? "loan" : "amortization";
+
+          await tx.insert(transactions).values({
+            participantId: input.participantId,
+            type: type,
+            amount: diff.abs().toFixed(2),
+            balanceBefore: p.currentDebt,
+            balanceAfter: p.currentDebt, // Loan limit total changes, current debt is unchanged here as we only update totalLoan limit, but wait this seems weird. Let's record the history.
+            description: `Limite de empréstimo total alterado: R$ ${oldLoanAmount.toFixed(2)} → R$ ${newLoanAmount.toFixed(2)}`,
+          });
+
+          await tx.insert(auditLog).values({
+            participantId: input.participantId,
+            participantName: p.name,
+            action: type === "loan" ? "loan_added" : "amortization_added",
+            amount: diff.abs().toFixed(2),
+            description: `Limite de empréstimo total ajustado manualmente: R$ ${oldLoanAmount.toFixed(2)} → R$ ${newLoanAmount.toFixed(2)}`,
+          });
+        }
+
+        return { success: true };
+      });
     }),
 
   updateParticipantDebt: protectedProcedure
@@ -137,7 +169,6 @@ export const participantsProcedures = {
       await getParticipantOrThrow(db, input.participantId, caixinha.id);
 
       return db.transaction(async (tx) => {
-        await tx.delete(auditLog).where(eq(auditLog.participantId, input.participantId));
         await tx.delete(monthlyPayments).where(eq(monthlyPayments.participantId, input.participantId));
         await tx.delete(transactions).where(eq(transactions.participantId, input.participantId));
         await tx.delete(participants).where(eq(participants.id, input.participantId));

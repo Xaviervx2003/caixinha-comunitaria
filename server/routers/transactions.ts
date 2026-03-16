@@ -120,11 +120,15 @@ export const transactionsProcedures = {
         if (existingPayment.length > 0 && existingPayment[0].paid === true)
           throw new TRPCError({ code: "CONFLICT", message: "Mês já pago." });
 
-        const paymentDate = input.paymentDate
+        const paymentDateObj = input.paymentDate
           ? new Date(input.paymentDate + 'T12:00:00')
           : new Date();
 
-        const late = isLatePayment(input.month, paymentDate, caixinha.paymentDueDay ?? 5);
+        if (paymentDateObj.getFullYear() < 2020 || paymentDateObj.getFullYear() > 2100) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Data de pagamento inválida." });
+        }
+
+        const late = isLatePayment(input.month, paymentDateObj, caixinha.paymentDueDay ?? 5);
         const currentDebt = new Decimal(p.currentDebt);
         
         // 🟢 LÊ A ETIQUETA DO BANCO DE DADOS
@@ -135,7 +139,7 @@ export const transactionsProcedures = {
           ? calcLateMonthlyPayment(currentDebt, role)
           : { ...calcMonthlyPayment(currentDebt, role), isLate: false, lateFee: new Decimal(0), lateInterest: new Decimal(0), totalLateCharge: new Decimal(0) };
 
-        const paidAt = paymentDate;
+        const paidAt = paymentDateObj;
 
         if (existingPayment.length > 0) {
           await tx.update(monthlyPayments)
@@ -219,7 +223,7 @@ export const transactionsProcedures = {
         throw new TRPCError({ code: "CONFLICT", message: "Pagamento já está desmarcado." });
       }
 
-      await tx.update(monthlyPayments).set({ paid: false }).where(eq(monthlyPayments.id, input.paymentId));
+      await tx.update(monthlyPayments).set({ paid: false, paidLate: false, paidAt: null }).where(eq(monthlyPayments.id, input.paymentId));
       const [originalTx] = await tx.select().from(transactions).where(and(
         eq(transactions.participantId, input.participantId),
         eq(transactions.type, "payment"),
@@ -273,7 +277,7 @@ export const transactionsProcedures = {
       if (payments.length === 0) return { success: true, reset: 0 };
 
       for (const { mp, participant } of payments) {
-        await tx.update(monthlyPayments).set({ paid: false }).where(eq(monthlyPayments.id, mp.id));
+        await tx.update(monthlyPayments).set({ paid: false, paidLate: false, paidAt: null }).where(eq(monthlyPayments.id, mp.id));
         const [originalTx] = await tx.select().from(transactions).where(and(
           eq(transactions.participantId, mp.participantId),
           eq(transactions.type, "payment"),

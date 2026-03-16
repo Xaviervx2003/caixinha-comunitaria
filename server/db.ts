@@ -25,7 +25,13 @@ export async function getDb(): Promise<MySql2Database> {
   }
   url = url.replace(/^['"]|['"]$/g, "");
 
-  _pool = mysql.createPool({ ...POOL_CONFIG, uri: url });
+  const isTiDB = url.includes("tidbcloud.com");
+  
+  _pool = mysql.createPool({ 
+    ...POOL_CONFIG, 
+    uri: url,
+    ssl: isTiDB ? { rejectUnauthorized: true } : undefined
+  });
 
   try {
     const conn = await _pool.getConnection();

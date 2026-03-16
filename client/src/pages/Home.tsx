@@ -12,7 +12,6 @@ import {
   Plus, PiggyBank, AlertTriangle, LayoutDashboard, Users,
   ArrowLeftRight, Settings, RotateCcw, Download, Upload, Search
 } from 'lucide-react';
-import { OfflineIndicator } from '@/components/OfflineIndicator';
 import { useLocalCache } from '@/hooks/use-local-cache';
 import { exportToCSV } from '@/lib/csv-export';
 import { ImportCSVModal } from '@/components/ImportCSVModal';
@@ -20,7 +19,7 @@ import { ImportedParticipant, ImportedTransaction } from '@/lib/csv-import';
 import { DebtEvolutionChart } from '@/components/DebtEvolutionChart';
 import { DebtorsList } from '@/components/DebtorsList';
 import { formatCurrency } from '@/lib/format-currency';
-import { calculateCollectionsFromTransactions } from '@shared/finance';
+import { calculateCollectionsFromTransactions, CAIXINHA_CONFIG } from '@shared/finance';
 import { HomeSidebar } from '@/components/home/HomeSidebar';
 import { HomeTopbar } from '@/components/home/HomeTopbar';
 import { DashboardSection } from '@/components/home/DashboardSection';
@@ -61,12 +60,7 @@ export default function Home() {
   const { data: monthlyHistory = [] } = trpc.caixinha.getMonthlySummaryHistory.useQuery({ limit: 24 }, { enabled: isAuthenticated }) as { data: any[] };
   const { data: dueAlerts } = trpc.caixinha.getDueAlerts.useQuery(undefined, { enabled: isAuthenticated }) as { data: any };
 
-  const getOrCreateCaixinhaMutation = trpc.caixinha.getOrCreateCaixinha.useMutation({
-    onSuccess: (data) => console.log('✅ Caixinha pronta:', data),
-    onError: (error) => console.error('❌ Erro:', error.message),
-  });
-
-  useEffect(() => { if (isAuthenticated) getOrCreateCaixinhaMutation.mutate(); }, [isAuthenticated]);
+  const { data: caixinhaInfo } = trpc.caixinha.getOrCreateCaixinha.useQuery(undefined, { enabled: isAuthenticated });
   useEffect(() => { if (participants.length > 0) saveToCache(CACHE_KEYS.PARTICIPANTS, participants); }, [participants]);
   useEffect(() => { if (allTransactions.length > 0) saveToCache(CACHE_KEYS.TRANSACTIONS, allTransactions); }, [allTransactions]);
 
@@ -167,7 +161,6 @@ export default function Home() {
   // ── Handlers ────────────────────────────────────────────────
   const handleAddParticipant = async () => {
     if (!newParticipantName.trim()) { showErrorToast('Nome obrigatório'); return; }
-    try { await getOrCreateCaixinhaMutation.mutateAsync(); } catch { showErrorToast('Erro ao inicializar caixinha'); return; }
     try {
       await addParticipantMutation.mutateAsync({ 
         name: newParticipantName.trim(), 
@@ -324,9 +317,6 @@ export default function Home() {
             </button>
           </div>
 
-          <p className="text-center text-gray-600 text-xs mt-6">
-            Senha padrão: <span className="text-gray-400 font-mono">admin123</span>
-          </p>
         </div>
       </div>
     );
@@ -349,7 +339,6 @@ export default function Home() {
   // ── TELA PRINCIPAL ──────────────────────────────────────────
   return (
     <div className="flex h-screen bg-[#F4F5F7] overflow-hidden">
-      <OfflineIndicator />
 
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/60 z-20 lg:hidden" onClick={() => setSidebarOpen(false)} />
@@ -485,7 +474,7 @@ export default function Home() {
                 id: p.id, name: p.name,
                 totalLoan: parseFloat(p.totalLoan.toString()),
                 currentDebt: parseFloat(p.currentDebt.toString()),
-                monthlyInterest: parseFloat(p.currentDebt.toString()) * 0.1,
+                monthlyInterest: parseFloat(p.currentDebt.toString()) * CAIXINHA_CONFIG.INTEREST_RATE.toNumber(),
                 role: p.role as 'member' | 'external',
               }))} />
             </div>
@@ -643,7 +632,7 @@ export default function Home() {
                 onChange={(e) => setNewParticipantRole(e.target.value as 'member' | 'external')} 
                 className="border-2 border-gray-200 rounded-lg h-11 px-3 font-medium text-sm focus:outline-none focus:border-[#00C853]"
               >
-                <option value="member">Membro (Paga R$ 200 + Juros)</option>
+                <option value="member">Membro (Paga R$ {CAIXINHA_CONFIG.MONTHLY_QUOTA.toNumber().toFixed(2)} + Juros)</option>
                 <option value="external">Tomador Externo (Paga APENAS Juros)</option>
               </select>
             </div>
