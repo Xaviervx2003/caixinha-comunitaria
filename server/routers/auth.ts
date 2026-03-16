@@ -1,44 +1,122 @@
-// server/routers/auth.ts
-import { z } from 'zod';
-import { TRPCError } from '@trpc/server';
-import { router, publicProcedure } from '../_core/trpc'; 
+﻿// server/routers/auth.ts
+import { publicProcedure, protectedProcedure } from "../_core/trpc";
+import { z } from "zod";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { TRPCError } from "@trpc/server";
+import { getDb } from "../db";
+import { users } from "../../drizzle/schema";
+import { eq } from "drizzle-orm";
+import type { JwtPayload } from "../_core/context";
 
-export const authRouter = router({
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Constantes de cookie â€” centralizadas aqui
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const COOKIE_NAME = "auth_token";
+const COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 dias em segundos
+
+function buildCookieOptions(maxAge: number) {
+  return [
+    `${COOKIE_NAME}=${maxAge > 0 ? "" : ""}`,
+    `Max-Age=${maxAge}`,
+    "Path=/",
+    "HttpOnly",                                                    // JS nÃ£o acessa o cookie
+    "SameSite=Lax",                                             // proteÃ§Ã£o CSRF
+    process.env.NODE_ENV === "production" ? "Secure" : "",        // HTTPS em prod
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Rotas
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+export const authProcedures = {
+
+  // â”€â”€ Login â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   login: publicProcedure
-    .input(z.object({ password: z.string() }))
-    .mutation(({ input, ctx }) => {
-      // A senha oficial fica no seu ficheiro .env. Exemplo: APP_SECRET_PASSWORD="sua-senha-aqui"
-      // Se a variável não for encontrada no .env, usa 'admin123' provisoriamente
-      const correctPassword = process.env.APP_SECRET_PASSWORD || 'admin123';
-      
-      if (input.password !== correctPassword) {
-        throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Senha incorreta!' });
+    .input(z.object({ password: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const secret = process.env.JWT_SECRET;
+      const passwordHash = process.env.ADMIN_PASSWORD_HASH;
+
+      if (!secret || !passwordHash) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "ConfiguraÃ§Ã£o do servidor incompleta.",
+        });
       }
 
-      // Carimba o navegador com um Cookie super seguro (válido por 30 dias)
-      ctx.res.cookie('auth_token', 'caixinha_autenticada_2026', {
-        httpOnly: true, 
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 1000 * 60 * 60 * 24 * 30, 
-      });
+      // ComparaÃ§Ã£o segura com bcrypt (resistente a timing attacks)
+      const isValid = await bcrypt.compare(input.password, passwordHash);
+      if (!isValid) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Senha incorreta.",
+        });
+      }
 
-      return { success: true };
+      // Busca (ou cria) o usuÃ¡rio admin no banco
+      const db = await getDb();
+      let [adminUser] = await db
+        .select()
+        .from(users)
+        .where(eq(users.role, "admin"))
+        .limit(1);
+
+      if (!adminUser) {
+        // Primeira execuÃ§Ã£o: cria o admin automaticamente
+        const [inserted] = await db.insert(users).values({
+          openId: "admin-local",
+          name: "Admin",
+          email: process.env.ADMIN_EMAIL || "admin@caixinha.local",
+          loginMethod: "password",
+          role: "admin",
+          lastSignedIn: new Date(),
+        });
+        const insertId = (inserted as any).insertId as number;
+        [adminUser] = await db.select().from(users).where(eq(users.id, insertId)).limit(1);
+      } else {
+        // Atualiza o lastSignedIn
+        await db
+          .update(users)
+          .set({ lastSignedIn: new Date() })
+          .where(eq(users.id, adminUser.id));
+      }
+
+      // Gera o JWT
+      const payload: JwtPayload = {
+        sub: adminUser.id,
+        role: adminUser.role as "admin",
+      };
+
+      const token = jwt.sign(payload, secret, { expiresIn: "7d" });
+
+      // Define o cookie HttpOnly
+      ctx.res.setHeader(
+        "Set-Cookie",
+        `${COOKIE_NAME}=${token}; Max-Age=${COOKIE_MAX_AGE}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,
+      );
+
+      return { success: true, name: adminUser.name };
     }),
-    
-  me: publicProcedure.query(({ ctx }) => {
-    // Verifica se o utilizador tem o carimbo de autenticação
-    const cookies = ctx.req.headers.cookie;
-    const isAuthenticated = cookies?.includes('auth_token=caixinha_autenticada_2026');
 
-    if (isAuthenticated) {
-      return { id: 1, role: 'Admin' };
-    }
-    return null; 
-  }),
-  
+  // â”€â”€ Logout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   logout: publicProcedure.mutation(({ ctx }) => {
-    ctx.res.clearCookie('auth_token');
+    // Apaga o cookie com Max-Age=0
+    ctx.res.setHeader(
+      "Set-Cookie",
+      `${COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`,
+    );
     return { success: true };
-  })
-});
+  }),
+
+  // â”€â”€ Me (quem estÃ¡ logado) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  me: protectedProcedure.query(({ ctx }) => {
+    return {
+      id: ctx.user.id,
+      name: ctx.user.name,
+      role: ctx.user.role,
+    };
+  }),
+};

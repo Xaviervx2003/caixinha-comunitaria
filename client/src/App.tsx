@@ -1,21 +1,21 @@
 // client/src/App.tsx
 import React from "react";
-import { Route, Switch } from "wouter";
+import { Route, Switch, useLocation } from "wouter";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-
 import { trpc, trpcClient, queryClient } from "@/lib/trpc";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import ErrorBoundary from "@/components/ErrorBoundary";
-
 import Home from "@/pages/Home";
+import Login from "@/pages/Login";
 import NotFound from "@/pages/NotFound";
 
-// ── Guardião de Rotas ─────────────────────────────────────────
+// ── Guardião de Rotas ─────────────────────────────────────────────────────────
 const ProtectedRoute = ({ component: Component }: { component: React.ComponentType<any> }) => {
   const { data: user, isLoading } = trpc.auth.me.useQuery();
+  const [, setLocation] = useLocation();
 
   if (isLoading) {
     return (
@@ -28,24 +28,29 @@ const ProtectedRoute = ({ component: Component }: { component: React.ComponentTy
     );
   }
 
-  // Home.tsx já gerencia o estado de login internamente
+  // 🟢 FIX: se não autenticado, mostra Login.tsx em vez do Home.tsx gerenciar isso
+  if (!user) {
+    return <Login />;
+  }
+
   return <Component />;
 };
 
-// ── Roteamento ────────────────────────────────────────────────
+// ── Roteamento ────────────────────────────────────────────────────────────────
 function Router() {
   return (
     <Switch>
       <Route path="/">
         {() => <ProtectedRoute component={Home} />}
       </Route>
+      <Route path="/login" component={Login} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-// ── Aplicação Raiz ────────────────────────────────────────────
+// ── Aplicação Raiz ────────────────────────────────────────────────────────────
 export default function App() {
   return (
     <ErrorBoundary>
