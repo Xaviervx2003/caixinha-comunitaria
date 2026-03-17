@@ -29,7 +29,7 @@ export type AuditEntry = {
   createdAt?: string | Date | null;
 };
 
-export type NavSection = 'dashboard' | 'participantes' | 'devedores' | 'transacoes' | 'configuracoes';
+export type NavSection = 'dashboard' | 'participantes' | 'devedores' | 'historico' | 'lucros' | 'transacoes' | 'configuracoes';
 
 export const MONTHS = [
   { value: '01', label: 'Janeiro' },

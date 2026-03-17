@@ -14,8 +14,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Plus, AlertTriangle, LayoutDashboard, Users,
-  ArrowLeftRight, Settings, RotateCcw, Download, Upload, Search,
+  ArrowLeftRight, Settings, RotateCcw, Download, Upload,
+  Search, History, TrendingUp,
 } from 'lucide-react';
+import { OfflineIndicator } from '@/components/OfflineIndicator';
 import { useLocalCache } from '@/hooks/use-local-cache';
 import { exportToCSV } from '@/lib/csv-export';
 import { ImportCSVModal } from '@/components/ImportCSVModal';
@@ -27,21 +29,25 @@ import { calculateCollectionsFromTransactions, CAIXINHA_CONFIG } from '@shared/f
 import { HomeSidebar } from '@/components/home/HomeSidebar';
 import { HomeTopbar } from '@/components/home/HomeTopbar';
 import { DashboardSection } from '@/components/home/DashboardSection';
+import { HistoricoSection } from '@/components/home/HistoricoSection';
+import { LucrosSection } from '@/components/home/LucrosSection';
 import { MONTHS, NavSection, Participant, Transaction, AuditEntry } from '@/components/home/types';
 import { showSuccessToast, showErrorToast } from '@/lib/toast-utils';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
 
-const NAV_ITEMS: { id: NavSection; label: string; icon: any; badge?: string }[] = [
+// ── Constantes estáveis fora do componente ───────────────────────────────────
+const currentYear = new Date().getFullYear();
+const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
+
+const NAV_ITEMS: { id: NavSection; label: string; icon: any }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'participantes', label: 'Participantes', icon: Users },
   { id: 'devedores', label: 'Devedores', icon: AlertTriangle },
+  { id: 'historico', label: 'Histórico por Mês', icon: History },
+  { id: 'lucros', label: 'Distribuição de Lucros', icon: TrendingUp },
   { id: 'transacoes', label: 'Transações', icon: ArrowLeftRight },
   { id: 'configuracoes', label: 'Configurações', icon: Settings },
 ];
-
-// 🟢 FIX: constantes estáveis fora do componente — não recalculam a cada render
-const currentYear = new Date().getFullYear();
-const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
 
 export default function Home() {
   const { user } = useAuth(); // App.tsx garante autenticação
@@ -50,8 +56,7 @@ export default function Home() {
   const [activeSection, setActiveSection] = useState<NavSection>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-
-  // ── Queries ──────────────────────────────────────────────────────────
+  // ── Queries ──────────────────────────────────────────────────────────────
   const { data: participants = [], isLoading } = trpc.caixinha.listParticipants.useQuery(
     undefined
   ) as { data: Participant[]; isLoading: boolean };
@@ -64,23 +69,15 @@ export default function Home() {
     { limit: 50 }
   ) as { data: AuditEntry[] };
 
-  const { data: nextMonthEstimate } = trpc.caixinha.getNextMonthEstimate.useQuery(
-    undefined
-  );
-  const { data: balancete } = trpc.caixinha.getBalancete.useQuery(
-    undefined
-  ) as { data: any };
+  const { data: nextMonthEstimate } = trpc.caixinha.getNextMonthEstimate.useQuery(undefined);
+  const { data: balancete } = trpc.caixinha.getBalancete.useQuery(undefined) as { data: any };
   const { data: monthlyHistory = [] } = trpc.caixinha.getMonthlySummaryHistory.useQuery(
     { limit: 24 }
   ) as { data: any[] };
-  const { data: dueAlerts } = trpc.caixinha.getDueAlerts.useQuery(
-    undefined
-  ) as { data: any };
-  const { data: caixinhaInfo } = trpc.caixinha.getOrCreateCaixinha.useQuery(
-    undefined
-  );
+  const { data: dueAlerts } = trpc.caixinha.getDueAlerts.useQuery(undefined) as { data: any };
+  const { data: caixinhaInfo } = trpc.caixinha.getOrCreateCaixinha.useQuery(undefined);
 
-  // 🟢 FIX: dependências corretas nos useEffects
+  // ── Cache local ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (participants.length > 0) saveToCache(CACHE_KEYS.PARTICIPANTS, participants);
   }, [participants, saveToCache, CACHE_KEYS.PARTICIPANTS]);
@@ -89,19 +86,19 @@ export default function Home() {
     if (allTransactions.length > 0) saveToCache(CACHE_KEYS.TRANSACTIONS, allTransactions);
   }, [allTransactions, saveToCache, CACHE_KEYS.TRANSACTIONS]);
 
-  // 🟢 FIX: invalidateAll agora cobre TODAS as queries relevantes
+  // ── invalidateAll completo ───────────────────────────────────────────────
   const invalidateAll = useCallback(() => {
     utils.caixinha.listParticipants.invalidate();
     utils.caixinha.getAllTransactions.invalidate();
     utils.caixinha.getMonthlyPayments.invalidate();
     utils.caixinha.getAuditLog.invalidate();
     utils.caixinha.getNextMonthEstimate.invalidate();
-    utils.caixinha.getBalancete.invalidate();            // 🟢 adicionado
-    utils.caixinha.getMonthlySummaryHistory.invalidate(); // 🟢 adicionado
-    utils.caixinha.getDueAlerts.invalidate();            // 🟢 adicionado
+    utils.caixinha.getBalancete.invalidate();
+    utils.caixinha.getMonthlySummaryHistory.invalidate();
+    utils.caixinha.getDueAlerts.invalidate();
   }, [utils]);
 
-  // ── Mutations ────────────────────────────────────────────────────────
+  // ── Mutations ────────────────────────────────────────────────────────────
   const addParticipantMutation = trpc.caixinha.addParticipant.useMutation({ onSuccess: invalidateAll });
   const addLoanMutation = trpc.caixinha.addLoan.useMutation({ onSuccess: invalidateAll });
   const paymentMutation = trpc.caixinha.registerPayment.useMutation({ onSuccess: invalidateAll, onError: (e) => showErrorToast(e.message) });
@@ -115,7 +112,19 @@ export default function Home() {
   const updateSettingsMutation = trpc.caixinha.updateCaixinhaSettings.useMutation({ onSuccess: () => showSuccessToast('Configurações salvas!') });
   const closeCycleMutation = trpc.caixinha.closeCycleSnapshot.useMutation({ onSuccess: invalidateAll });
 
-  // ── Estados dos Modais ───────────────────────────────────────────────
+  // 🟢 Exclusão em lote (vindo do Arquivo 1)
+  const deleteMultipleParticipantsMutation = trpc.caixinha.deleteMultipleParticipants.useMutation({
+    onSuccess: () => {
+      invalidateAll();
+      setIsSelectionMode(false);
+      setSelectedForDelete([]);
+      setIsBulkDeleteConfirmOpen(false);
+      showSuccessToast('Participantes excluídos com sucesso!');
+    },
+    onError: () => showErrorToast('Erro ao excluir participantes'),
+  });
+
+  // ── Estados dos Modais ───────────────────────────────────────────────────
   const [isAddParticipantOpen, setIsAddParticipantOpen] = useState(false);
   const [isAddLoanOpen, setIsAddLoanOpen] = useState(false);
   const [isAmortizeOpen, setIsAmortizeOpen] = useState(false);
@@ -133,7 +142,12 @@ export default function Home() {
   const [isCloseCycleConfirmOpen, setIsCloseCycleConfirmOpen] = useState(false);
   const [chartParticipantId, setChartParticipantId] = useState<number | null>(null);
 
-  // ── Estados dos Formulários ──────────────────────────────────────────
+  // 🟢 Estados de seleção em lote (vindo do Arquivo 1)
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedForDelete, setSelectedForDelete] = useState<number[]>([]);
+  const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
+
+  // ── Estados dos Formulários ──────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
   const [newParticipantName, setNewParticipantName] = useState('');
   const [newParticipantEmail, setNewParticipantEmail] = useState('');
@@ -151,8 +165,13 @@ export default function Home() {
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [settingsDueDay, setSettingsDueDay] = useState('5');
   const [settingsName, setSettingsName] = useState('');
+  // 🟢 Período da caixinha (vindo do Arquivo 1)
+  const [settingsStartMonth, setSettingsStartMonth] = useState('12');
+  const [settingsStartYear, setSettingsStartYear] = useState('2025');
+  const [settingsEndMonth, setSettingsEndMonth] = useState('10');
+  const [settingsEndYear, setSettingsEndYear] = useState('2026');
 
-  // ── Valores derivados com useMemo ────────────────────────────────────
+  // ── Valores derivados com useMemo ────────────────────────────────────────
   const selectedParticipant = useMemo(
     () => participants.find((p) => p.id === selectedParticipantId),
     [participants, selectedParticipantId]
@@ -199,7 +218,7 @@ export default function Home() {
     { enabled: isHistoryOpen && !!selectedParticipantId }
   ) as { data?: any; isLoading: boolean };
 
-  // ── Handlers ─────────────────────────────────────────────────────────
+  // ── Handlers ─────────────────────────────────────────────────────────────
   const handleAddParticipant = async () => {
     if (!newParticipantName.trim()) { showErrorToast('Nome obrigatório'); return; }
     try {
@@ -216,7 +235,7 @@ export default function Home() {
   };
 
   const handleAddLoan = async () => {
-    if (isCurrentMonthClosed) { showErrorToast('Mês atual já fechado. Reabra período para editar.'); return; }
+    if (isCurrentMonthClosed) { showErrorToast('Mês atual já fechado.'); return; }
     if (!selectedParticipantId || !loanAmount) return;
     const amount = parseFloat(loanAmount);
     if (isNaN(amount) || amount <= 0) { showErrorToast('Valor inválido'); return; }
@@ -228,7 +247,7 @@ export default function Home() {
   };
 
   const handlePayment = async () => {
-    if (isCurrentMonthClosed) { showErrorToast('Mês atual já fechado. Reabra período para editar.'); return; }
+    if (isCurrentMonthClosed) { showErrorToast('Mês atual já fechado.'); return; }
     if (!selectedParticipantId) return;
     try {
       await paymentMutation.mutateAsync({
@@ -243,7 +262,7 @@ export default function Home() {
   };
 
   const handleAmortize = async () => {
-    if (isCurrentMonthClosed) { showErrorToast('Mês atual já fechado. Reabra período para editar.'); return; }
+    if (isCurrentMonthClosed) { showErrorToast('Mês atual já fechado.'); return; }
     if (!selectedParticipantId || !amortizeAmount) return;
     const amount = parseFloat(amortizeAmount);
     if (isNaN(amount) || amount <= 0) { showErrorToast('Valor inválido'); return; }
@@ -257,7 +276,7 @@ export default function Home() {
   };
 
   const handleResetMonth = async () => {
-    if (isCurrentMonthClosed) { showErrorToast('Mês atual já fechado. Reabra período para editar.'); return; }
+    if (isCurrentMonthClosed) { showErrorToast('Mês atual já fechado.'); return; }
     try {
       const now = new Date();
       await resetMonthMutation.mutateAsync({
@@ -269,16 +288,13 @@ export default function Home() {
     } catch { showErrorToast('Erro ao resetar mês'); }
   };
 
-  // 🟢 FIX: handleCloseCycle movido para ANTES do return condicional de login
   const handleCloseCycle = async () => {
     const [year] = currentMonthKey.split('-').map(Number);
     try {
       await closeCycleMutation.mutateAsync({ month: currentMonthKey, year });
       setIsCloseCycleConfirmOpen(false);
       showSuccessToast(`Ciclo ${currentMonthKey} fechado com snapshot imutável.`);
-    } catch (e: any) {
-      showErrorToast(e?.message || 'Erro ao fechar ciclo');
-    }
+    } catch (e: any) { showErrorToast(e?.message || 'Erro ao fechar ciclo'); }
   };
 
   const handleEditLoan = async () => {
@@ -318,16 +334,23 @@ export default function Home() {
     catch { showErrorToast('Erro ao importar'); throw new Error('Import failed'); }
   };
 
+  // 🟢 Período da caixinha incluído no save (vindo do Arquivo 1)
   const handleSaveSettings = async () => {
     const day = parseInt(settingsDueDay);
     if (isNaN(day) || day < 1 || day > 28) { showErrorToast('Dia inválido (1-28)'); return; }
+    const startDate = `${settingsStartYear}-${settingsStartMonth}-01`;
+    const endDate = `${settingsEndYear}-${settingsEndMonth}-01`;
     try {
-      await updateSettingsMutation.mutateAsync({ paymentDueDay: day, ...(settingsName.trim() ? { name: settingsName.trim() } : {}) });
+      await updateSettingsMutation.mutateAsync({
+        paymentDueDay: day,
+        startDate,
+        endDate,
+        ...(settingsName.trim() ? { name: settingsName.trim() } : {}),
+      });
     } catch { showErrorToast('Erro ao salvar configurações'); }
   };
 
-  // 🟢 FIX: handler extraído — sem lógica inline no JSX
-  const handleExportCSV = () => {
+  const handleExportCSV = useCallback(() => {
     try {
       exportToCSV(
         participants.map((p) => ({ id: p.id, name: p.name, totalLoan: p.totalLoan.toString(), currentDebt: p.currentDebt.toString(), createdAt: p.createdAt?.toString() })),
@@ -336,39 +359,57 @@ export default function Home() {
       );
       showSuccessToast('Backup exportado!');
     } catch { showErrorToast('Erro'); }
-  };
+  }, [participants, allTransactions]);
 
-  // ── TELA PRINCIPAL ────────────────────────────────────────────────────
+  // ── TELA PRINCIPAL ────────────────────────────────────────────────────────
   return (
     <div className="flex h-screen bg-[#F4F5F7] overflow-hidden">
+      <OfflineIndicator />
+
       {sidebarOpen && <div className="fixed inset-0 bg-black/60 z-20 lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
-      <HomeSidebar sidebarOpen={sidebarOpen} activeSection={activeSection} navItems={NAV_ITEMS} debtors={debtors} userName={user?.name}
-        onSelectSection={(section) => { setActiveSection(section); setSidebarOpen(false); }} />
+      <HomeSidebar
+        sidebarOpen={sidebarOpen}
+        activeSection={activeSection}
+        navItems={NAV_ITEMS}
+        debtors={debtors}
+        userName={user?.name}
+        onSelectSection={(section) => { setActiveSection(section); setSidebarOpen(false); }}
+      />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <HomeTopbar activeSection={activeSection} activeSectionLabel={NAV_ITEMS.find((n) => n.id === activeSection)?.label || 'Dashboard'}
-          onOpenSidebar={() => setSidebarOpen(true)} onOpenAddParticipant={() => setIsAddParticipantOpen(true)} />
+        <HomeTopbar
+          activeSection={activeSection}
+          activeSectionLabel={NAV_ITEMS.find((n) => n.id === activeSection)?.label || 'Dashboard'}
+          onOpenSidebar={() => setSidebarOpen(true)}
+          onOpenAddParticipant={() => setIsAddParticipantOpen(true)}
+        />
 
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">
 
-          {/* ── DASHBOARD ────────────────────────────────────────────── */}
+          {/* ── DASHBOARD ─────────────────────────────────────────────── */}
           {activeSection === 'dashboard' && (
             <DashboardSection
               totalFees={totalFees}
               totalInterest={balancete ? parseFloat(balancete.totalRendimentos || '0') : totalInterest}
               totalDebts={balancete ? parseFloat(balancete.contasAReceber || '0') : totalDebts}
-              balancete={balancete} isCurrentMonthClosed={isCurrentMonthClosed}
-              onCloseCycle={() => setIsCloseCycleConfirmOpen(true)} monthlyHistory={monthlyHistory}
-              dueAlerts={dueAlerts} nextMonthEstimate={nextMonthEstimate as any}
-              isEstimateExpanded={isEstimateExpanded} participants={participants} allTransactions={allTransactions}
+              balancete={balancete}
+              isCurrentMonthClosed={isCurrentMonthClosed}
+              onCloseCycle={() => setIsCloseCycleConfirmOpen(true)}
+              monthlyHistory={monthlyHistory}
+              dueAlerts={dueAlerts}
+              nextMonthEstimate={nextMonthEstimate as any}
+              isEstimateExpanded={isEstimateExpanded}
+              participants={participants}
+              allTransactions={allTransactions}
               onToggleEstimate={() => setIsEstimateExpanded(!isEstimateExpanded)}
-              onResetMonth={() => setIsResetConfirmOpen(true)} onImportCSV={() => setIsImportOpen(true)}
+              onResetMonth={() => setIsResetConfirmOpen(true)}
+              onImportCSV={() => setIsImportOpen(true)}
               onViewAllParticipants={() => setActiveSection('participantes')}
             />
           )}
 
-          {/* ── PARTICIPANTES ─────────────────────────────────────────── */}
+          {/* ── PARTICIPANTES ──────────────────────────────────────────── */}
           {activeSection === 'participantes' && (
             <div className="max-w-7xl mx-auto">
               {isLoading ? (
@@ -398,12 +439,37 @@ export default function Home() {
                         <p className="text-xs text-gray-500 font-bold">{participants.length} participantes registados</p>
                       </div>
                     </div>
-                    <div className="relative w-full sm:w-80">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                      <Input placeholder="Buscar por nome..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-9 border-2 border-gray-200 rounded-xl focus:border-[#00C853] transition-colors h-11 font-medium" />
+                    <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto items-center">
+
+                      {/* 🟢 Seleção múltipla (vindo do Arquivo 1) */}
+                      {isSelectionMode ? (
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                          <button onClick={() => { setIsSelectionMode(false); setSelectedForDelete([]); }}
+                            className="text-sm font-bold text-gray-500 hover:text-black px-4 py-2 transition-colors">
+                            Cancelar
+                          </button>
+                          <button
+                            onClick={() => setIsBulkDeleteConfirmOpen(true)}
+                            disabled={selectedForDelete.length === 0}
+                            className="text-sm font-bold bg-red-500 text-white px-5 py-2 rounded-lg hover:bg-red-600 disabled:opacity-50 transition-colors w-full sm:w-auto shadow-sm">
+                            Excluir ({selectedForDelete.length})
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setIsSelectionMode(true)}
+                          className="text-sm font-bold bg-slate-100 text-slate-700 px-5 py-2 rounded-lg hover:bg-slate-200 border-2 border-slate-200 transition-colors w-full sm:w-auto">
+                          Selecionar Vários
+                        </button>
+                      )}
+
+                      <div className="relative w-full sm:w-80">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                        <Input placeholder="Buscar por nome..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                          className="pl-9 border-2 border-gray-200 rounded-xl focus:border-[#00C853] transition-colors h-11 font-medium" />
+                      </div>
                     </div>
                   </div>
+
                   {filteredParticipants.length === 0 ? (
                     <div className="py-16 text-center bg-white rounded-xl border border-gray-200 border-dashed">
                       <p className="text-gray-400 font-bold">Nenhum participante encontrado para "{searchQuery}"</p>
@@ -412,7 +478,18 @@ export default function Home() {
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
                       {filteredParticipants.map((participant) => (
-                        <ParticipantCard key={participant.id} participant={participant as any}
+                        <ParticipantCard
+                          key={participant.id}
+                          participant={participant as any}
+                          allTransactions={allTransactions}
+                          // 🟢 Props de seleção (vindo do Arquivo 1)
+                          selectionMode={isSelectionMode}
+                          isSelected={selectedForDelete.includes(participant.id)}
+                          onToggleSelection={() => setSelectedForDelete((prev) =>
+                            prev.includes(participant.id)
+                              ? prev.filter((id) => id !== participant.id)
+                              : [...prev, participant.id]
+                          )}
                           onPayment={() => { setSelectedParticipantId(participant.id); setIsPaymentOpen(true); }}
                           onAmortize={() => { setSelectedParticipantId(participant.id); setAmortizeAmount(''); setIsAmortizeOpen(true); }}
                           onAddLoan={() => { setSelectedParticipantId(participant.id); setLoanAmount(''); setIsAddLoanOpen(true); }}
@@ -444,6 +521,12 @@ export default function Home() {
               }))} />
             </div>
           )}
+
+          {/* 🟢 ── HISTÓRICO POR MÊS (vindo do Arquivo 1) ──────────────── */}
+          {activeSection === 'historico' && <HistoricoSection />}
+
+          {/* 🟢 ── DISTRIBUIÇÃO DE LUCROS (vindo do Arquivo 1) ─────────── */}
+          {activeSection === 'lucros' && <LucrosSection />}
 
           {/* ── TRANSAÇÕES ────────────────────────────────────────────── */}
           {activeSection === 'transacoes' && (
@@ -486,20 +569,18 @@ export default function Home() {
                 <div className="divide-y divide-gray-50">
                   {auditLogEntries.length === 0 ? (
                     <div className="py-12 text-center text-gray-400">Nenhum registro de auditoria.</div>
-                  ) : (
-                    auditLogEntries.slice(0, 30).map((e) => (
-                      <div key={e.id} className="flex items-start gap-4 px-6 py-4 hover:bg-gray-50">
-                        <div className="w-2 h-2 rounded-full bg-[#00C853] mt-2 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-gray-800">{e.participantName}</p>
-                          <p className="text-xs text-gray-500 truncate">{e.description || e.action}</p>
-                        </div>
-                        <span className="text-xs text-gray-400 shrink-0">
-                          {e.createdAt ? new Date(e.createdAt.toString()).toLocaleDateString('pt-BR') : ''}
-                        </span>
+                  ) : auditLogEntries.slice(0, 30).map((e) => (
+                    <div key={e.id} className="flex items-start gap-4 px-6 py-4 hover:bg-gray-50">
+                      <div className="w-2 h-2 rounded-full bg-[#00C853] mt-2 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-gray-800">{e.participantName}</p>
+                        <p className="text-xs text-gray-500 truncate">{e.description || e.action}</p>
                       </div>
-                    ))
-                  )}
+                      <span className="text-xs text-gray-400 shrink-0">
+                        {e.createdAt ? new Date(e.createdAt.toString()).toLocaleDateString('pt-BR') : ''}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -523,6 +604,44 @@ export default function Home() {
                       className="w-full border-2 border-gray-200 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:border-[#00C853] transition-colors" />
                     <p className="text-xs text-gray-400 mt-1.5">Dia do mês seguinte em que o pagamento vence. Padrão: 5.</p>
                   </div>
+
+                  {/* 🟢 Período da caixinha (vindo do Arquivo 1) */}
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">Período da Caixinha</label>
+                    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1">
+                          <label className="block text-xs font-semibold text-gray-500 mb-1.5">Início</label>
+                          <div className="flex gap-2">
+                            <select value={settingsStartMonth} onChange={(e) => setSettingsStartMonth(e.target.value)}
+                              className="flex-1 border-2 border-gray-200 rounded-lg px-3 py-2.5 text-sm font-medium focus:outline-none focus:border-[#00C853] transition-colors bg-white">
+                              {MONTHS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                            </select>
+                            <select value={settingsStartYear} onChange={(e) => setSettingsStartYear(e.target.value)}
+                              className="w-24 border-2 border-gray-200 rounded-lg px-3 py-2.5 text-sm font-medium focus:outline-none focus:border-[#00C853] transition-colors bg-white">
+                              {years.map((y) => <option key={y} value={y}>{y}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        <span className="text-gray-400 font-bold mt-5">→</span>
+                        <div className="flex-1">
+                          <label className="block text-xs font-semibold text-gray-500 mb-1.5">Fim</label>
+                          <div className="flex gap-2">
+                            <select value={settingsEndMonth} onChange={(e) => setSettingsEndMonth(e.target.value)}
+                              className="flex-1 border-2 border-gray-200 rounded-lg px-3 py-2.5 text-sm font-medium focus:outline-none focus:border-[#00C853] transition-colors bg-white">
+                              {MONTHS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                            </select>
+                            <select value={settingsEndYear} onChange={(e) => setSettingsEndYear(e.target.value)}
+                              className="w-24 border-2 border-gray-200 rounded-lg px-3 py-2.5 text-sm font-medium focus:outline-none focus:border-[#00C853] transition-colors bg-white">
+                              {years.map((y) => <option key={y} value={y}>{y}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-2">Defina o mês de início e o mês final do ciclo da caixinha.</p>
+                    </div>
+                  </div>
+
                   <div className="pt-2">
                     <button onClick={handleSaveSettings} disabled={updateSettingsMutation.isPending}
                       className="w-full bg-[#00C853] text-white py-3 rounded-lg font-bold hover:bg-[#00a844] transition-colors disabled:opacity-50">
@@ -566,10 +685,7 @@ export default function Home() {
             <DialogDescription className="text-gray-500">Adicione um novo membro à Caixinha.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label className="font-bold text-sm">Nome</Label>
-              <Input value={newParticipantName} onChange={(e) => setNewParticipantName(e.target.value)} className="border-2 rounded-lg h-11" placeholder="João Silva" />
-            </div>
+            <div className="grid gap-2"><Label className="font-bold text-sm">Nome</Label><Input value={newParticipantName} onChange={(e) => setNewParticipantName(e.target.value)} className="border-2 rounded-lg h-11" placeholder="João Silva" /></div>
             <div className="grid gap-2">
               <Label className="font-bold text-sm">Tipo de Participante</Label>
               <select value={newParticipantRole} onChange={(e) => setNewParticipantRole(e.target.value as 'member' | 'external')}
@@ -578,14 +694,8 @@ export default function Home() {
                 <option value="external">Tomador Externo (Paga APENAS Juros)</option>
               </select>
             </div>
-            <div className="grid gap-2">
-              <Label className="font-bold text-sm">Email (opcional)</Label>
-              <Input type="email" value={newParticipantEmail} onChange={(e) => setNewParticipantEmail(e.target.value)} className="border-2 rounded-lg h-11" placeholder="joao@email.com" />
-            </div>
-            <div className="grid gap-2">
-              <Label className="font-bold text-sm">Valor do Empréstimo Inicial</Label>
-              <Input type="number" value={newParticipantLoan} onChange={(e) => setNewParticipantLoan(e.target.value)} className="border-2 rounded-lg h-11" placeholder="0,00" />
-            </div>
+            <div className="grid gap-2"><Label className="font-bold text-sm">Email (opcional)</Label><Input type="email" value={newParticipantEmail} onChange={(e) => setNewParticipantEmail(e.target.value)} className="border-2 rounded-lg h-11" placeholder="joao@email.com" /></div>
+            <div className="grid gap-2"><Label className="font-bold text-sm">Valor do Empréstimo Inicial</Label><Input type="number" value={newParticipantLoan} onChange={(e) => setNewParticipantLoan(e.target.value)} className="border-2 rounded-lg h-11" placeholder="0,00" /></div>
           </div>
           <DialogFooter>
             <Button onClick={handleAddParticipant} disabled={addParticipantMutation.isPending}
@@ -655,13 +765,13 @@ export default function Home() {
         <DialogContent className="bg-white rounded-xl border-0 shadow-2xl w-full sm:max-w-[520px]">
           <DialogHeader>
             <DialogTitle className="text-xl font-black">Fechar Ciclo {currentMonthKey}</DialogTitle>
-            <DialogDescription>Confirme para gerar snapshot imutável do mês e bloquear edições operacionais.</DialogDescription>
+            <DialogDescription>Confirme para gerar snapshot imutável do mês.</DialogDescription>
           </DialogHeader>
           <div className="bg-gray-50 rounded-lg p-4 text-sm space-y-2">
             <p><strong>Contas a receber:</strong> {formatCurrency(parseFloat(balancete?.contasAReceber || '0'))}</p>
             <p><strong>Rendimentos:</strong> {formatCurrency(parseFloat(balancete?.totalRendimentos || '0'))}</p>
             <p><strong>Inadimplência (membros):</strong> {balancete?.inadimplenciaSegmentada?.membros ?? 0}</p>
-            <p><strong>Inadimplência (externos c/ dívida):</strong> {balancete?.inadimplenciaSegmentada?.externosComDivida ?? 0}</p>
+            <p><strong>Inadimplência (externos):</strong> {balancete?.inadimplenciaSegmentada?.externosComDivida ?? 0}</p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsCloseCycleConfirmOpen(false)} className="rounded-lg">Cancelar</Button>
@@ -710,6 +820,16 @@ export default function Home() {
         isLoading={deleteParticipantMutation.isPending}
         onConfirm={handleDeleteParticipant} onCancel={() => setIsDeleteConfirmOpen(false)} />
 
+      {/* 🟢 Modal exclusão em lote (vindo do Arquivo 1) */}
+      <ConfirmationModal
+        isOpen={isBulkDeleteConfirmOpen}
+        title="Excluir Múltiplos Participantes"
+        description={`Tem certeza que deseja excluir os ${selectedForDelete.length} participantes selecionados? Esta ação apagará todo o histórico deles e é irreversível.`}
+        confirmText="Excluir Todos" cancelText="Cancelar" isDangerous={true}
+        isLoading={deleteMultipleParticipantsMutation.isPending}
+        onConfirm={() => deleteMultipleParticipantsMutation.mutate({ participantIds: selectedForDelete })}
+        onCancel={() => setIsBulkDeleteConfirmOpen(false)} />
+
       <ConfirmationModal isOpen={isResetConfirmOpen} title="Resetar Mês"
         description="Todos os pagamentos do mês atual serão zerados. Irreversível."
         confirmText="Resetar" cancelText="Cancelar" isDangerous={true}
@@ -722,7 +842,9 @@ export default function Home() {
         const p = participants.find((p) => p.id === chartParticipantId);
         if (!p) return null;
         return (
-          <DebtEvolutionChart isOpen={isChartOpen} onClose={() => { setIsChartOpen(false); setChartParticipantId(null); }}
+          <DebtEvolutionChart
+            isOpen={isChartOpen}
+            onClose={() => { setIsChartOpen(false); setChartParticipantId(null); }}
             participantName={p.name || 'Desconhecido'}
             initialDebt={parseFloat(p.totalLoan?.toString() || '0')}
             currentDebt={parseFloat(p.currentDebt?.toString() || '0')}

@@ -236,4 +236,41 @@ export const participantsProcedures = {
         return { success: true };
       });
     }),
+
+  // ?? Exclusão em lote
+  deleteMultipleParticipants: adminProcedure
+    .input(z.object({ participantIds: z.array(participantIdSchema).min(1).max(50) }))
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const caixinha = await getCaixinhaOrThrow(db, ctx.user.id);
+
+      return db.transaction(async (tx) => {
+        for (const participantId of input.participantIds) {
+          const [p] = await tx
+            .select()
+            .from(participants)
+            .where(and(
+              eq(participants.id, participantId),
+              eq(participants.caixinhaId, caixinha.id),
+            ))
+            .limit(1);
+
+          if (!p) continue;
+
+          await tx.insert(auditLog).values({
+            participantId,
+            participantName: p.name,
+            action: "participant_deleted",
+            description: `Participante removido em exclusão em lote`,
+          });
+
+          await tx.delete(monthlyPayments).where(eq(monthlyPayments.participantId, participantId));
+          await tx.delete(transactions).where(eq(transactions.participantId, participantId));
+          await tx.delete(participants).where(eq(participants.id, participantId));
+        }
+
+        return { success: true, deleted: input.participantIds.length };
+      });
+    }),
 };
+
